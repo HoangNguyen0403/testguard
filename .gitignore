@@ -1,6 +1,6 @@
 bin/
 dist/
-testguard
+/testguard
 *.exe
 .testguard/
 coverage.out
