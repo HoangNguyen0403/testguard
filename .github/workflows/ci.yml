@@ -30,13 +30,16 @@ jobs:
         run: go test -v -race ./...
 
       - name: Build binary
+        shell: bash
         run: |
           mkdir -p bin
-          CGO_ENABLED=1 go build -v -o bin/ ./cmd/testguard
-
-      - name: Ad-hoc codesign (macOS)
-        if: runner.os == 'macOS'
-        run: codesign -s - ./bin/testguard
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go build -v -ldflags="-linkmode=external" -o bin/testguard ./cmd/testguard
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            go build -v -o bin/testguard.exe ./cmd/testguard
+          else
+            go build -v -o bin/testguard ./cmd/testguard
+          fi
 
       - name: Smoke test compiled CLI
         shell: bash
