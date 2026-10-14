@@ -26,8 +26,8 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Run tests with coverage & race detector
-        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+      - name: Run unit and race tests
+        run: go test -v -race ./...
 
       - name: Build binary
         run: go build -v -o bin/testguard ./cmd/testguard
