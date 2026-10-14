@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run unit and race tests
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go test -v -ldflags="-linkmode=external" ./...
+          else
+            go test -v -race ./...
+          fi
+
+      - name: Build binary
+        shell: bash
+        run: |
+          mkdir -p bin
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go build -v -ldflags="-linkmode=external" -o bin/testguard ./cmd/testguard
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            go build -v -o bin/testguard.exe ./cmd/testguard
+          else
+            go build -v -o bin/testguard ./cmd/testguard
+          fi
+
+      - name: Smoke test compiled CLI
+        shell: bash
+        run: |
+          BIN="./bin/testguard"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="./bin/testguard.exe"
+          fi
+          "$BIN" --version
+          "$BIN" rules
+          "$BIN" explain GUARD-DART-SEED-ECHO
+          "$BIN" explain GUARD-DART-UNCOVERED-MUTATION
+          "$BIN" init
+          "$BIN" --all

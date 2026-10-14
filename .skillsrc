@@ -1,0 +1,51 @@
+registry: https://github.com/HoangNguyen0403/agent-skills-standard
+agents:
+  - claude
+skills:
+  golang:
+    ref: golang-v1.3.4
+  common:
+    ref: common-v2.7.0
+  quality-engineering:
+    ref: quality-engineering-v1.6.0
+  system-design:
+    ref: system-design-v1.2.0
+  cybersecurity:
+    ref: cybersecurity-v1.0.0
+custom_overrides: []
+workflows:
+  - sdlc
+  - brainstorm-feature
+  - code-review
+  - codebase-review
+  - system-design-session
+  - review-system-design
+  - design-solution
+  - implementation-readiness
+  - plan-feature
+  - review-ticket
+  - skill-benchmark
+  - evals-run
+  - pentest
+  - dev-fix
+  - implement-feature
+  - verify-work
+  - verify-bug
+  - security-test
+  - test-loop
+  - uat-signoff
+  - deploy-release
+  - monitor-respond
+  - incident-hotfix
+  - traceability-audit
+  - session-report
+  - publish-notes
+  - retro-learn
+  - battle-test
+  - update-docs
+mcp:
+  enabled: true
+  scope: project
+  prompted: true
+workflows_ref: workflows-v1.0.0
+specialists_ref: specialists-v1.5.0

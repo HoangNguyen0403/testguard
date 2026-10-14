@@ -8,19 +8,19 @@ TestGuard inspects test suites, detects duplicate/clone tests, flags vanity test
 
 ## ⚡ Quickstart
 
-### Native Install
+Get up and running in 60 seconds! Read the full **[QUICKSTART Guide](QUICKSTART.md)** for detailed walkthroughs, or install below:
 
-**macOS & Linux:**
+### macOS, Linux, and WSL:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/HoangNguyen0403/testguard/main/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+### Windows (PowerShell):
 ```powershell
 irm https://raw.githubusercontent.com/HoangNguyen0403/testguard/main/install.ps1 | iex
 ```
 
-**Go Install:**
+### Go Install:
 ```bash
 go install github.com/HoangNguyen0403/testguard/cmd/testguard@latest
 ```
@@ -54,6 +54,13 @@ testguard explain GUARD-DART-SEED-ECHO
 | **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps disguised state mirrors, seed echoes, and uncovered loading mutations (`isFetching = true`). |
 | **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models) and port-only mocking. |
 | **TypeScript / Web** | `jest`, `vitest` | Catches shallow mock echoes and snapshot-only test smells. |
+
+---
+
+## 📄 Documentation
+
+- **[Quickstart Guide](QUICKSTART.md)** — Step-by-step installation, CI integration, and troubleshooting.
+- **[Changelog](CHANGELOG.md)** — Release history and version updates.
 
 ---
 
