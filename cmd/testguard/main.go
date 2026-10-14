@@ -5,11 +5,13 @@ import (
 	"os"
 
 	"github.com/HoangNguyen0403/testguard/pkg/docs"
+	"github.com/HoangNguyen0403/testguard/pkg/engine"
+	"github.com/HoangNguyen0403/testguard/pkg/reporter"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version = "0.1.0-dev"
+	version = "0.1.0"
 	commit  = "none"
 	date    = "unknown"
 )
@@ -17,6 +19,8 @@ var (
 func main() {
 	var diffMode bool
 	var allMode bool
+	var format string
+	var outputFile string
 
 	rootCmd := &cobra.Command{
 		Use:   "testguard [paths...]",
@@ -24,23 +28,54 @@ func main() {
 		Long: `TestGuard is a standalone, zero-config polyglot CLI that inspects test code,
 detects duplicate tests, catches vanity test anti-patterns, and enforces architectural
 boundaries across Dart/Flutter, Go, and TypeScript.`,
+		Args:    cobra.ArbitraryArgs,
 		Version: fmt.Sprintf("%s (commit: %s, built at: %s)", version, commit, date),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mode := "default"
-			if diffMode {
-				mode = "diff-only"
-			} else if allMode {
-				mode = "all (full suite)"
+			eng := engine.New()
+
+			opts := engine.Options{
+				TargetPaths: args,
+				DiffOnly:    diffMode,
+				ScanAll:     allMode,
 			}
 
-			fmt.Printf("🛡️ TestGuard Polyglot Engine v%s [%s]\n", version, mode)
-			fmt.Println("Status: Ready. Run 'testguard --help' for options.")
+			res, err := eng.Run(opts)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(2)
+			}
+
+			// Render according to requested format
+			switch format {
+			case "json":
+				return reporter.WriteJSONReport(os.Stdout, res.Violations)
+			case "azure":
+				r := reporter.NewAzureReporter(os.Stdout)
+				r.Render(res.Violations)
+			default:
+				term := reporter.NewTerminalReporter(os.Stdout)
+				exitCode := term.Render(res.Violations, res.ScannedFiles, res.ParseErrors, res.Skipped)
+
+				// Auto-save markdown report
+				outPath := outputFile
+				if outPath == "" {
+					outPath = ".testguard/report.md"
+				}
+				_ = reporter.WriteMarkdownReport(outPath, res.Violations, res.ScannedFiles, res.ParseErrors, res.Skipped)
+
+				if exitCode != 0 {
+					os.Exit(exitCode)
+				}
+			}
+
 			return nil
 		},
 	}
 
 	rootCmd.Flags().BoolVarP(&diffMode, "diff", "d", false, "Scan only modified test files against base branch")
 	rootCmd.Flags().BoolVarP(&allMode, "all", "a", false, "Scan all test files in the workspace")
+	rootCmd.Flags().StringVarP(&format, "format", "f", "console", "Output format (console, json, azure)")
+	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Path to export markdown scorecard (default: .testguard/report.md)")
 
 	explainCmd := &cobra.Command{
 		Use:   "explain <rule-id>",
