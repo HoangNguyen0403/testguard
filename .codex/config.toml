@@ -1,3 +1,0 @@
-[mcp_servers.agent-skills-standard]
-command = "npx"
-args = ["-y", "agent-skills-standard-mcp@0.6.1"]

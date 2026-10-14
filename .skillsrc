@@ -1,10 +1,6 @@
 registry: https://github.com/HoangNguyen0403/agent-skills-standard
 agents:
   - claude
-  - antigravity
-  - codex
-  - cursor
-  - copilot
 skills:
   golang:
     ref: golang-v1.3.4
