@@ -20,7 +20,7 @@ func DiscoverModules(rootDir string) ([]parser.ModuleRoot, error) {
 
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" {
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -46,12 +46,43 @@ func DiscoverModules(rootDir string) ([]parser.ModuleRoot, error) {
 				Language: "typescript",
 				HasTests: true,
 			})
+		case "build.gradle", "build.gradle.kts":
+			modules = append(modules, parser.ModuleRoot{
+				Path:     dir,
+				Language: "kotlin",
+				HasTests: true,
+			})
+		case "Package.swift":
+			modules = append(modules, parser.ModuleRoot{
+				Path:     dir,
+				Language: "swift",
+				HasTests: true,
+			})
 		}
 
 		return nil
 	})
 
 	return modules, err
+}
+
+// isTestFileName checks if a file name matches any supported test naming convention.
+func isTestFileName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, "_test.dart") ||
+		strings.HasSuffix(lower, "_test.go") ||
+		strings.HasSuffix(lower, ".test.ts") ||
+		strings.HasSuffix(lower, ".test.tsx") ||
+		strings.HasSuffix(lower, ".spec.ts") ||
+		strings.HasSuffix(lower, ".spec.tsx") ||
+		strings.HasSuffix(lower, ".test.js") ||
+		strings.HasSuffix(lower, ".test.jsx") ||
+		strings.HasSuffix(lower, ".spec.js") ||
+		strings.HasSuffix(lower, ".spec.jsx") ||
+		strings.HasSuffix(lower, "test.kt") ||
+		strings.HasSuffix(lower, "tests.kt") ||
+		strings.HasSuffix(lower, "test.swift") ||
+		strings.HasSuffix(lower, "tests.swift")
 }
 
 // FindTestFiles searches for test files under a given directory for a language adapter.
@@ -65,14 +96,13 @@ func FindTestFiles(dir string, adapter parser.LanguageAdapter) ([]string, error)
 
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" {
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if strings.HasSuffix(d.Name(), "_test.dart") || strings.HasSuffix(d.Name(), "_test.go") || strings.HasSuffix(d.Name(), ".test.ts") || strings.HasSuffix(d.Name(), ".spec.ts") {
-			// Check if generated
+		if isTestFileName(d.Name()) {
 			header := make([]byte, 256)
 			f, err := os.Open(path)
 			if err == nil {

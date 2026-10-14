@@ -39,7 +39,7 @@ func TestDetectUncoveredLoadingMutation(t *testing.T) {
 		StartLine:  50,
 		Kind:       "bloc",
 		ActBody:    "bloc.add(const CustomerCodeEvent.fetch())",
-		ExpectBody: "[isA<CustomerCodeState>().having((s) => s.userInfo, 'userInfo', fakeUser)]", // Omitted isFetching
+		ExpectBody: "[isA<CustomerCodeState>().having((s) => s.userInfo, 'userInfo', fakeUser)]",
 	}
 
 	checker := dart.NewUncoveredMutationRule()
@@ -53,5 +53,46 @@ func TestDetectUncoveredLoadingMutation(t *testing.T) {
 	}
 	if violations[0].Severity != models.SeverityBlocker {
 		t.Errorf("expected Blocker severity, got %s", violations[0].Severity)
+	}
+}
+
+func TestDetectDisguisedMirror(t *testing.T) {
+	unitWithChains := parser.TestUnit{
+		Name:       "test_chains",
+		FilePath:   "customer_code_bloc_test.dart",
+		StartLine:  340,
+		Kind:       "bloc",
+		SeedBody:   "baseState.copyWith(userInfo: fakeUser)",
+		ExpectBody: "[isA<CustomerCodeState>().having((s) => s.hideCustomer, 'hideCustomer', false).having((s) => s.userInfo, 'userInfo', fakeUser).having((s) => s.selectedSalesOrg, 'selectedSalesOrg', fakeSaleOrg).having((s) => s.isFetching, 'isFetching', true)]",
+	}
+
+	checker := dart.NewDisguisedMirrorRule()
+	violations := checker.Evaluate(unitWithChains)
+
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 disguised mirror violation, got %d", len(violations))
+	}
+	if violations[0].RuleID != "GUARD-DART-DISGUISED-MIRROR" {
+		t.Errorf("expected GUARD-DART-DISGUISED-MIRROR, got %s", violations[0].RuleID)
+	}
+}
+
+func TestDetectMockEcho(t *testing.T) {
+	unitWithMockEcho := parser.TestUnit{
+		Name:      "test_mock_echo",
+		FilePath:  "repo_test.dart",
+		StartLine: 20,
+		Kind:      "unit",
+		RawBody:   "when(() => api.fetch()).thenAnswer((_) => Right(mockData));\nexpect(repo.fetch(), equals(Right(mockData)));",
+	}
+
+	checker := dart.NewMockEchoRule()
+	violations := checker.Evaluate(unitWithMockEcho)
+
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 mock echo violation, got %d", len(violations))
+	}
+	if violations[0].RuleID != "GUARD-DART-MOCK-ECHO" {
+		t.Errorf("expected GUARD-DART-MOCK-ECHO, got %s", violations[0].RuleID)
 	}
 }
