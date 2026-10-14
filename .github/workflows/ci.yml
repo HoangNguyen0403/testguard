@@ -27,7 +27,13 @@ jobs:
         run: go mod verify
 
       - name: Run unit and race tests
-        run: go test -v -race ./...
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            go test -v -ldflags="-linkmode=external" ./...
+          else
+            go test -v -race ./...
+          fi
 
       - name: Build binary
         shell: bash
