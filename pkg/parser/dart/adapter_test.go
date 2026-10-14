@@ -1,6 +1,7 @@
 package dart_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
@@ -74,5 +75,98 @@ func TestIsGenerated(t *testing.T) {
 	}
 	if adapter.IsGenerated("cart_bloc_test.dart", []byte("// pure code")) {
 		t.Errorf("expected regular test file to not be generated")
+	}
+}
+
+func TestLocateUnitTestUnits(t *testing.T) {
+	tests := []struct {
+		name               string
+		source             string
+		expectedTestName   string
+		expectedAssertions []string
+		expectedBodySubstr string
+	}{
+		{
+			name: "simple test with expect",
+			source: `
+void main() {
+  test('simple test with expect', () {
+    final result = 1 + 1;
+    expect(result, equals(2));
+  });
+}
+`,
+			expectedTestName:   "simple test with expect",
+			expectedAssertions: []string{"expect"},
+			expectedBodySubstr: "expect(result, equals(2));",
+		},
+		{
+			name: "test with nested block closure followed by expect",
+			source: `
+void main() {
+  test('nested closure test', () async {
+    final items = <String>[];
+    stream.listen((event) {
+      items.add(event);
+    });
+    expect(items, isNotEmpty);
+  });
+}
+`,
+			expectedTestName:   "nested closure test",
+			expectedAssertions: []string{"expect"},
+			expectedBodySubstr: "expect(items, isNotEmpty);",
+		},
+		{
+			name: "test with multiple nested blocks and expectLater",
+			source: `
+void main() {
+  test('multiple nested blocks', () async {
+    controller.stream.listen((event) {
+      if (event.isValid) {
+        processItems(event.items, (item) {
+          cache.put(item.id, item);
+        });
+      }
+    });
+    await expectLater(controller.stream, emitsDone);
+  });
+}
+`,
+			expectedTestName:   "multiple nested blocks",
+			expectedAssertions: []string{"expectLater"},
+			expectedBodySubstr: "expectLater(controller.stream, emitsDone);",
+		},
+	}
+
+	adapter := dart.NewAdapter()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			units, err := adapter.LocateTests([]byte(tc.source), "test.dart")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(units) != 1 {
+				t.Fatalf("expected 1 test unit, got %d", len(units))
+			}
+			unit := units[0]
+			if unit.Name != tc.expectedTestName {
+				t.Errorf("expected test name %q, got %q", tc.expectedTestName, unit.Name)
+			}
+			if unit.Kind != "unit" {
+				t.Errorf("expected kind %q, got %q", "unit", unit.Kind)
+			}
+			if len(unit.Assertions) != len(tc.expectedAssertions) {
+				t.Fatalf("expected %d assertions, got %d: %v", len(tc.expectedAssertions), len(unit.Assertions), unit.Assertions)
+			}
+			for i, exp := range tc.expectedAssertions {
+				if unit.Assertions[i] != exp {
+					t.Errorf("expected assertion[%d] = %q, got %q", i, exp, unit.Assertions[i])
+				}
+			}
+			if !strings.Contains(unit.RawBody, tc.expectedBodySubstr) {
+				t.Errorf("expected raw body to contain %q, but got:\n%s", tc.expectedBodySubstr, unit.RawBody)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@ package golang
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -14,7 +15,27 @@ var (
 	sqlmockRegex        = regexp.MustCompile(`(?i)(?:sqlmock\.New|pgxmock\.New|gorm\.Open)`)
 	rowPatternRegex     = regexp.MustCompile(`(?m)^\s*\{([^}]+)\},?`)
 	commentRegex        = regexp.MustCompile(`//.*`)
+
+	repoOrInfraPatterns = []string{
+		"/repository/",
+		"_repository_test.go",
+		"/infrastructure/",
+		"/database/",
+		"/db/",
+		"/dao/",
+		"/store/",
+	}
 )
+
+func isRepositoryOrInfraLayer(filePath string) bool {
+	normalized := "/" + strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+	for _, pattern := range repoOrInfraPatterns {
+		if strings.Contains(normalized, pattern) || strings.Contains(filePath, pattern) {
+			return true
+		}
+	}
+	return false
+}
 
 // DomainPurityRule enforces that domain entity/model tests contain zero mocks.
 type DomainPurityRule struct{}
@@ -54,6 +75,10 @@ func NewPortMockingRule() *PortMockingRule {
 
 func (r *PortMockingRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var violations []models.Violation
+
+	if isRepositoryOrInfraLayer(unit.FilePath) {
+		return violations
+	}
 
 	if sqlmockRegex.MatchString(unit.RawBody) {
 		violations = append(violations, models.Violation{
