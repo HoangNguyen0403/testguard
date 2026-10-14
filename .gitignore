@@ -1,0 +1,9 @@
+bin/
+dist/
+testguard
+*.exe
+.testguard/
+coverage.out
+.DS_Store
+.idea/
+.vscode/
