@@ -26,8 +26,16 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
-      - name: Run tests
-        run: go test -v -race ./...
+      - name: Run tests with coverage & race detector
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
       - name: Build binary
         run: go build -v -o bin/testguard ./cmd/testguard
+
+      - name: Smoke test compiled CLI
+        shell: bash
+        run: |
+          ./bin/testguard --version
+          ./bin/testguard rules
+          ./bin/testguard explain GUARD-DART-SEED-ECHO
+          ./bin/testguard explain GUARD-DART-UNCOVERED-MUTATION
