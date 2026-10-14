@@ -58,3 +58,5 @@ jobs:
           "$BIN" rules
           "$BIN" explain GUARD-DART-SEED-ECHO
           "$BIN" explain GUARD-DART-UNCOVERED-MUTATION
+          "$BIN" init
+          "$BIN" --all
