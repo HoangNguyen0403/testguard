@@ -32,7 +32,7 @@ jobs:
       - name: Build binary
         run: |
           mkdir -p bin
-          go build -v -o bin/ ./cmd/testguard
+          CGO_ENABLED=1 go build -v -o bin/ ./cmd/testguard
 
       - name: Ad-hoc codesign (macOS)
         if: runner.os == 'macOS'
