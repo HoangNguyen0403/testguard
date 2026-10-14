@@ -41,7 +41,7 @@ func HashTokenStream(code string) string {
 // Check compares test units within the same file for duplicate execution bodies.
 func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 	var violations []models.Violation
-	seenHashes := make(map[string]parser.TestUnit)
+	seenHashes := make(map[string][]parser.TestUnit)
 
 	for _, unit := range units {
 		if len(unit.RawBody) < 20 {
@@ -49,18 +49,36 @@ func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 		}
 
 		h := HashTokenStream(unit.RawBody)
-		if first, exists := seenHashes[h]; exists {
-			violations = append(violations, models.Violation{
-				RuleID:     "GUARD-UNIV-01",
-				Severity:   models.SeverityAdvisory,
-				FilePath:   unit.FilePath,
-				LineNumber: unit.StartLine,
-				Column:     1,
-				Message:    fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", unit.Name, first.Name, first.StartLine),
-				Suggestion: "Check whether this test exercises a distinct edge case or consolidate into a table-driven parameterized test.",
-			})
-		} else {
-			seenHashes[h] = unit
+		seenHashes[h] = append(seenHashes[h], unit)
+	}
+
+	for _, group := range seenHashes {
+		if len(group) == 2 || len(group) == 3 {
+			// Exact clone between 2-3 tests
+			for i := 1; i < len(group); i++ {
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-UNIV-01",
+					Severity:   models.SeverityAdvisory,
+					FilePath:   group[i].FilePath,
+					LineNumber: group[i].StartLine,
+					Column:     1,
+					Message:    fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", group[i].Name, group[0].Name, group[0].StartLine),
+					Suggestion: "Check whether this test exercises a distinct edge case or consolidate into a table-driven parameterized test.",
+				})
+			}
+		} else if len(group) >= 4 {
+			// Structural repetition smell (>=4 tests)
+			for i := 3; i < len(group); i++ {
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-UNIV-02",
+					Severity:   models.SeverityAdvisory,
+					FilePath:   group[i].FilePath,
+					LineNumber: group[i].StartLine,
+					Column:     1,
+					Message:    fmt.Sprintf("Structural repetition: '%s' shares identical AST structure with %d other tests in this file (first seen at '%s', line %d).", group[i].Name, len(group)-1, group[0].Name, group[0].StartLine),
+					Suggestion: "Consolidate repetitive test structures into a parameterized table-driven test loop.",
+				})
+			}
 		}
 	}
 
