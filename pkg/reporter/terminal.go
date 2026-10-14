@@ -3,6 +3,7 @@ package reporter
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
@@ -69,6 +70,8 @@ func (r *TerminalReporter) Render(violations []models.Violation, scannedFiles, p
 	maxDisplay := 10
 	displayed := 0
 
+	noColor := os.Getenv("NO_COLOR") != ""
+
 	for i, v := range violations {
 		if i >= maxDisplay && v.Severity != models.SeverityBlocker {
 			fmt.Fprintf(r.out, "... and %d more advisory/warning issue(s) written to .testguard/report.md\n", len(violations)-i)
@@ -76,17 +79,33 @@ func (r *TerminalReporter) Render(violations []models.Violation, scannedFiles, p
 		}
 
 		icon := "💡"
+		if noColor {
+			icon = "[ADVISORY]"
+		}
+
 		switch v.Severity {
 		case models.SeverityBlocker:
-			icon = "🚨"
+			if noColor {
+				icon = "[BLOCKER]"
+			} else {
+				icon = "🚨"
+			}
 		case models.SeverityWarning:
-			icon = "⚠️"
+			if noColor {
+				icon = "[WARNING]"
+			} else {
+				icon = "⚠️"
+			}
 		}
 
 		fmt.Fprintf(r.out, "%s:%d:%d\n", v.FilePath, v.LineNumber, v.Column)
 		fmt.Fprintf(r.out, "  %s [%s] %s\n", icon, v.RuleID, v.Message)
 		if v.Suggestion != "" {
-			fmt.Fprintf(r.out, "  💡 Fix: %s\n", v.Suggestion)
+			fixLabel := "💡 Fix:"
+			if noColor {
+				fixLabel = "Fix:"
+			}
+			fmt.Fprintf(r.out, "  %s %s\n", fixLabel, v.Suggestion)
 		}
 		fmt.Fprintln(r.out)
 		displayed++
