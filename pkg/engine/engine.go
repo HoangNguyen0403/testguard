@@ -16,12 +16,16 @@ import (
 	tsrules "github.com/HoangNguyen0403/testguard/pkg/rules/typescript"
 )
 
+// ProgressFunc receives phase lifecycle events, item counters, and target file paths.
+type ProgressFunc func(phase string, current, total int, currentFile string)
+
 // Options configures the engine audit run.
 type Options struct {
 	TargetPaths []string
 	DiffOnly    bool
 	ScanAll     bool
 	BaseBranch  string
+	ProgressFn  ProgressFunc
 }
 
 // Result contains the aggregated scan statistics and violations.
@@ -129,6 +133,9 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
+	if opts.ProgressFn != nil {
+		opts.ProgressFn("discovering", 0, 0, "")
+	}
 
 	var allTestFiles []string
 	for _, p := range paths {
@@ -140,7 +147,14 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 
 	result.ScannedFiles = len(allTestFiles)
 
-	for _, file := range allTestFiles {
+	if opts.ProgressFn != nil {
+		opts.ProgressFn("discovered", len(allTestFiles), len(allTestFiles), "")
+	}
+
+	for i, file := range allTestFiles {
+		if opts.ProgressFn != nil {
+			opts.ProgressFn("scanning", i+1, len(allTestFiles), file)
+		}
 		content, err := os.ReadFile(file)
 		if err != nil {
 			result.ParseErrors++

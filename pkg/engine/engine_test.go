@@ -65,3 +65,67 @@ void main() {
 		t.Errorf("expected to detect GUARD-DART-SEED-ECHO")
 	}
 }
+
+func TestEngineProgressCallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	testDir := filepath.Join(tmpDir, "test")
+	_ = os.MkdirAll(testDir, 0755)
+
+	file1 := filepath.Join(testDir, "a_test.go")
+	_ = os.WriteFile(file1, []byte("package test\nfunc TestA(t *testing.T) {}\n"), 0644)
+
+	file2 := filepath.Join(testDir, "b_test.go")
+	_ = os.WriteFile(file2, []byte("package test\nfunc TestB(t *testing.T) {}\n"), 0644)
+
+	type progressEvent struct {
+		phase       string
+		current     int
+		total       int
+		currentFile string
+	}
+
+	var events []progressEvent
+	progressFn := func(phase string, current, total int, currentFile string) {
+		events = append(events, progressEvent{
+			phase:       phase,
+			current:     current,
+			total:       total,
+			currentFile: currentFile,
+		})
+	}
+
+	eng := engine.New()
+	_, err := eng.Run(engine.Options{
+		TargetPaths: []string{tmpDir},
+		ScanAll:     true,
+		ProgressFn:  progressFn,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error running engine: %v", err)
+	}
+
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 progress events, got %d", len(events))
+	}
+
+	// First event should be discovering
+	if events[0].phase != "discovering" {
+		t.Errorf("expected first event phase 'discovering', got %q", events[0].phase)
+	}
+
+	// Second event should be discovered with total = 2
+	if events[1].phase != "discovered" || events[1].total != 2 {
+		t.Errorf("expected second event 'discovered' with total 2, got %+v", events[1])
+	}
+
+	// Remaining events should be scanning
+	scanningCount := 0
+	for _, e := range events[2:] {
+		if e.phase == "scanning" {
+			scanningCount++
+		}
+	}
+	if scanningCount != 2 {
+		t.Errorf("expected 2 scanning events, got %d", scanningCount)
+	}
+}

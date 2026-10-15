@@ -60,7 +60,16 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 				ScanAll:     allMode,
 			}
 
+			var progress *reporter.ProgressReporter
+			if !jsonMode && format != "json" {
+				progress = reporter.NewProgressReporter(os.Stderr)
+				opts.ProgressFn = progress.Update
+			}
+
 			res, err := eng.Run(opts)
+			if progress != nil {
+				progress.Finish()
+			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(2)
