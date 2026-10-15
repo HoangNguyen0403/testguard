@@ -44,8 +44,8 @@ func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 	seenHashes := make(map[string][]parser.TestUnit)
 
 	for _, unit := range units {
-		if len(unit.RawBody) < 20 {
-			continue // Skip trivial 1-liners
+		if unit.Kind == "file" || len(unit.RawBody) < 20 {
+			continue
 		}
 
 		h := HashTokenStream(unit.RawBody)

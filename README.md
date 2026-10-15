@@ -60,8 +60,8 @@ testguard explain GUARD-DART-SEED-ECHO
 ## 📄 Documentation
 
 - **[Quickstart Guide](QUICKSTART.md)** — Step-by-step installation, CI integration, and troubleshooting.
+- **[Architecture & Design Guide](ARCHITECTURE.md)** — Core design principles, execution lifecycle, package boundaries, and extension recipes for maintainers and AI agents.
 - **[Changelog](CHANGELOG.md)** — Release history and version updates.
-
 ---
 
 ## 📄 License
