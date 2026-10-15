@@ -56,7 +56,7 @@ doctor: ## Run agent-skills-standard health audit
 ## 🚀 Quick Release Automation
 
 # Helper: extracts current latest semantic tag or defaults to v0.1.0
-CURRENT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+CURRENT_TAG := $(firstword $(shell git tag -l "v[0-9]*" --sort=-v:refname 2>/dev/null) v0.1.0)
 
 release-dry: ## Run GoReleaser in dry-run snapshot mode without publishing
 	@echo "🔍 Running release dry-run snapshot..."
