@@ -20,7 +20,7 @@ func DiscoverModules(rootDir string) ([]parser.ModuleRoot, error) {
 
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist" {
+			if path != rootDir && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -96,7 +96,7 @@ func FindTestFiles(dir string, adapter parser.LanguageAdapter) ([]string, error)
 
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist" {
+			if path != dir && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist") {
 				return filepath.SkipDir
 			}
 			return nil
