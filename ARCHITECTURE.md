@@ -70,13 +70,13 @@ pkg/updater/                 # Self-updating mechanism via GitHub Releases API
                      ▼
        ┌─────────────────────────────┐
        │ Loop: each test file        │
-       │   1. Read content           │
-       │   2. Parse suppressions     │
-       │   3. Parse AST/TestUnits    │
-       │   4. Run Universal Detectors│
-       │   5. Run Language Rules     │
-       │   6. Filter Suppressed      │
-       │   7. Emit "scanning" event  │
+       │   1. Emit "scanning" event  │
+       │   2. Read content           │
+       │   3. Parse suppressions     │
+       │   4. Parse AST/TestUnits    │
+       │   5. Run Universal Detectors│
+       │   6. Run Language Rules     │
+       │   7. Filter Suppressed      │
        └─────────────────────────────┘
                      │
                      ▼
@@ -127,11 +127,12 @@ TestGuard provides live visual progress during both discovery and scanning witho
 2. Implement `parser.LanguageAdapter` interface:
    ```go
    type LanguageAdapter interface {
+       ID() string
+       FileExtensions() []string
        LocateTests(content []byte, filePath string) ([]TestUnit, error)
-       IsGenerated(filePath string) bool
+       IsGenerated(filePath string, header []byte) bool
    }
    ```
-3. Update `pkg/engine/discovery.go` (`DiscoverModules` and `isTestFileName`) to recognize the language's manifest files (`Cargo.toml`, `pom.xml`, etc.) and test naming conventions (`_test.rs`, `*Test.java`, etc.).
 4. Add the adapter to `pkg/engine/engine.go` and hook into the file loop.
 
 ---

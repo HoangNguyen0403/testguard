@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Engine Progress Hooks**:
   - Added decoupled `ProgressFunc` callback to `engine.Options` dispatching `"discovering"`, `"discovered"`, and `"scanning"` lifecycle events.
 
+
+### Fixed
+- **CI Gate & Exit Code Enforcement**:
+  - Enforced exit code 1 on Blocker findings across all output formats (`--json`, `-f azure`, and console).
+  - Fixed `WriteJSONReport` emitting `[]` instead of `null` when no violations exist.
+  - Validated target paths with `os.Stat` (errors immediately on nonexistent paths) and rejected unsupported `--format` values.
+- **Polyglot Test Unit Parsing & Clone Accuracy**:
+  - Extracted individual test function bodies via AST brace matching (`parser.FindMatchingBrace`) instead of passing the entire file content as `RawBody`.
+  - Eliminated false-positive duplicate clone warnings (`GUARD-UNIV-01`/`02`) and multi-counting on Go, TypeScript, Kotlin, and Swift files.
+  - Prevented test fixtures inside string literals from being misidentified as tests.
+- **Dart AST Parsing & Location Accuracy**:
+  - Added support for `testWidgets(...)` in Flutter tests.
+  - Allowed apostrophes inside double-quoted test names (e.g. `test("doesn't crash", ...)`).
+  - Switched `StartLine` calculation from naive substring search to exact match byte-offset binary search.
+- **Target Path Deduplication**:
+  - Deduplicated target test files by clean path to prevent overlapping arguments (e.g. `testguard pkg pkg/rules`) from scanning files multiple times.
+- **Progress Throttling & Viewport Sizing**:
+  - Decoupled `ProgressReporter.Update()` from synchronous terminal write syscalls on the engine hot path.
+  - Capped line display width under 72 characters to prevent wrapping and row clutter on standard 80-column viewports.
+  - Implemented rune-safe path truncation for multi-byte Unicode paths.
 ---
 
 ## [0.1.2] - 2026-10-15

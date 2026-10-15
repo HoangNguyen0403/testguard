@@ -137,6 +137,33 @@ void main() {
 			expectedAssertions: []string{"expectLater"},
 			expectedBodySubstr: "expectLater(controller.stream, emitsDone);",
 		},
+		{
+			name: "double quoted test name with apostrophe",
+			source: `
+void main() {
+  test("doesn't crash on invalid payload", () {
+    expect(true, isTrue);
+  });
+}
+`,
+			expectedTestName:   "doesn't crash on invalid payload",
+			expectedAssertions: []string{"expect"},
+			expectedBodySubstr: "expect(true, isTrue);",
+		},
+		{
+			name: "testWidgets with tester closure",
+			source: `
+void main() {
+  testWidgets('renders submit button', (tester) async {
+    await tester.pumpWidget(const MyWidget());
+    expect(find.byType(ElevatedButton), findsOneWidget);
+  });
+}
+`,
+			expectedTestName:   "renders submit button",
+			expectedAssertions: []string{"expect"},
+			expectedBodySubstr: "findsOneWidget",
+		},
 	}
 
 	adapter := dart.NewAdapter()

@@ -77,4 +77,10 @@ func TestProgressReporterTruncatePath(t *testing.T) {
 	if !strings.HasPrefix(short, "...") {
 		t.Errorf("expected truncated path to start with '...', got %s", short)
 	}
+
+	multiByte := "datasource/ezrx/mobile/订单详情_test.dart"
+	truncatedRune := reporter.TruncatePath(multiByte, 15)
+	if len([]rune(truncatedRune)) > 15 {
+		t.Errorf("expected truncated runes <= 15, got %d", len([]rune(truncatedRune)))
+	}
 }

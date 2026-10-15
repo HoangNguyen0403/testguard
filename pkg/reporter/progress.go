@@ -30,10 +30,12 @@ type ProgressReporter struct {
 	current     int
 	total       int
 	currentFile string
-	isFinished  bool
-	ticker      *time.Ticker
-	done        chan struct{}
-	doneAck     chan struct{}
+	isFinished    bool
+	renderedPhase string
+	lastRender    time.Time
+	ticker        *time.Ticker
+	done          chan struct{}
+	doneAck       chan struct{}
 }
 
 // isTerminalFile inspects whether the target writer is an interactive character device.
@@ -51,7 +53,11 @@ func isTerminalFile(w io.Writer) bool {
 
 // isInteractive determines if the writer supports dynamic cursor rewrites.
 func isInteractive(w io.Writer) bool {
-	if os.Getenv("CI") != "" || os.Getenv("TERM") == "dumb" {
+	ci := os.Getenv("CI")
+	if ci != "" && ci != "false" && ci != "0" {
+		return false
+	}
+	if os.Getenv("TERM") == "dumb" {
 		return false
 	}
 	return isTerminalFile(w)
@@ -101,7 +107,7 @@ func NewProgressReporterWithOptions(w io.Writer, cfg ProgressConfig) *ProgressRe
 	return reporter
 }
 
-// Update records current scan metrics and triggers immediate display synchronization.
+// Update records current scan metrics and triggers throttled display synchronization.
 func (p *ProgressReporter) Update(phase string, current, total int, currentFile string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -114,8 +120,12 @@ func (p *ProgressReporter) Update(phase string, current, total int, currentFile 
 	p.current = current
 	p.total = total
 	p.currentFile = currentFile
-
-	p.renderLocked()
+	now := time.Now()
+	if phase != p.renderedPhase || now.Sub(p.lastRender) >= 80*time.Millisecond {
+		p.renderedPhase = phase
+		p.renderLocked()
+		p.lastRender = now
+	}
 }
 
 // renderLocked writes formatted progress lines to the configured writer under lock.
@@ -140,7 +150,7 @@ func (p *ProgressReporter) renderLocked() {
 	case "discovered":
 		_, _ = fmt.Fprintf(p.out, "\r\033[2K%c Discovered %d test files. Beginning audit...", frame, p.total)
 	case "scanning":
-		truncated := TruncatePath(p.currentFile, 45)
+		truncated := TruncatePath(p.currentFile, 32)
 		_, _ = fmt.Fprintf(p.out, "\r\033[2K%c Scanning test files [%d/%d] • %s", frame, p.current, p.total, truncated)
 	}
 }
@@ -172,13 +182,14 @@ func (p *ProgressReporter) Finish() {
 	}
 }
 
-// TruncatePath shortens long file paths for single-line terminal viewports.
+// TruncatePath shortens long file paths for single-line terminal viewports, rune-safe.
 func TruncatePath(path string, maxLen int) string {
-	if maxLen <= 0 || len(path) <= maxLen {
+	runes := []rune(path)
+	if maxLen <= 0 || len(runes) <= maxLen {
 		return path
 	}
 	if maxLen <= 3 {
-		return path[:maxLen]
+		return string(runes[:maxLen])
 	}
-	return "..." + path[len(path)-(maxLen-3):]
+	return "..." + string(runes[len(runes)-(maxLen-3):])
 }

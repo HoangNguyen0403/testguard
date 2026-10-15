@@ -8,6 +8,7 @@ import (
 	"github.com/HoangNguyen0403/testguard/pkg/engine"
 	"github.com/HoangNguyen0403/testguard/pkg/reporter"
 	"github.com/HoangNguyen0403/testguard/pkg/updater"
+	"github.com/HoangNguyen0403/testguard/pkg/models"
 	"github.com/spf13/cobra"
 )
 
@@ -54,6 +55,10 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			eng := engine.New()
 
+			if format != "console" && format != "json" && format != "azure" {
+				return fmt.Errorf("unsupported output format %q: must be console, json, or azure", format)
+			}
+
 			opts := engine.Options{
 				TargetPaths: args,
 				DiffOnly:    diffMode,
@@ -65,6 +70,11 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 				progress = reporter.NewProgressReporter(os.Stderr)
 				opts.ProgressFn = progress.Update
 			}
+			defer func() {
+				if progress != nil {
+					progress.Finish()
+				}
+			}()
 
 			res, err := eng.Run(opts)
 			if progress != nil {
@@ -75,14 +85,31 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 				os.Exit(2)
 			}
 
+			hasBlockers := false
+			for _, v := range res.Violations {
+				if v.Severity == models.SeverityBlocker {
+					hasBlockers = true
+					break
+				}
+			}
+
 			// CLIG: Support --json direct flag or -f json
 			if jsonMode || format == "json" {
-				return reporter.WriteJSONReport(os.Stdout, res.Violations)
+				if err := reporter.WriteJSONReport(os.Stdout, res.Violations); err != nil {
+					return err
+				}
+				if hasBlockers {
+					os.Exit(1)
+				}
+				return nil
 			}
 
 			if format == "azure" {
 				r := reporter.NewAzureReporter(os.Stdout)
 				r.Render(res.Violations)
+				if hasBlockers {
+					os.Exit(1)
+				}
 				return nil
 			}
 

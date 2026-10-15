@@ -67,6 +67,9 @@ func WriteMarkdownReport(filePath string, violations []models.Violation, scanned
 
 // WriteJSONReport writes the violations as formatted JSON to a writer.
 func WriteJSONReport(out io.Writer, violations []models.Violation) error {
+	if violations == nil {
+		violations = []models.Violation{}
+	}
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 	return enc.Encode(violations)

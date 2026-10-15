@@ -129,3 +129,34 @@ func TestEngineProgressCallback(t *testing.T) {
 		t.Errorf("expected 2 scanning events, got %d", scanningCount)
 	}
 }
+
+func TestEngineTargetNotFound(t *testing.T) {
+	eng := engine.New()
+	_, err := eng.Run(engine.Options{
+		TargetPaths: []string{"/nonexistent-directory-testguard-path-12345"},
+	})
+	if err == nil {
+		t.Errorf("expected error for nonexistent target path, got nil")
+	}
+}
+
+func TestEnginePathDeduplication(t *testing.T) {
+	tmpDir := t.TempDir()
+	testDir := filepath.Join(tmpDir, "test")
+	_ = os.MkdirAll(testDir, 0755)
+
+	file1 := filepath.Join(testDir, "sample_test.go")
+	_ = os.WriteFile(file1, []byte("package test\nfunc TestSample(t *testing.T) {}\n"), 0644)
+
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{tmpDir, testDir},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if res.ScannedFiles != 1 {
+		t.Errorf("expected exactly 1 scanned file due to deduplication, got %d", res.ScannedFiles)
+	}
+}

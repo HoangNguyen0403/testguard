@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	blocTestRegex = regexp.MustCompile(`(?s)blocTest\s*(?:<[^>]+>)?\s*\(\s*['"]([^'"]+)['"]\s*,\s*(.*?)\);\s*(?:\n|$)`)
-	unitTestHeaderRegex = regexp.MustCompile(`(?s)\btest\s*\(\s*['"]((?:\\.|[^'"])+)['"]\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
+	blocTestRegex       = regexp.MustCompile(`(?s)blocTest\s*(?:<[^>]+>)?\s*\(\s*['"]([^'"]+)['"]\s*,\s*(.*?)\);\s*(?:\n|$)`)
+	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
 	seedRegex     = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
 	actRegex      = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
 	expectRegex   = regexp.MustCompile(`(?s)\bexpect\s*:\s*\(\)\s*=>\s*(\[.*?\])\s*,`)
@@ -49,15 +49,25 @@ func (a *Adapter) IsGenerated(filePath string, header []byte) bool {
 func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit, error) {
 	var units []parser.TestUnit
 	src := string(source)
-	lines := strings.Split(src, "\n")
-
-	findLine := func(substr string) int {
-		for i, l := range lines {
-			if strings.Contains(l, substr) {
-				return i + 1
+	lineOffsets := []int{0}
+	for i := range len(src) {
+		if src[i] == '\n' {
+			lineOffsets = append(lineOffsets, i+1)
+		}
+	}
+	offsetToLine := func(byteOffset int) int {
+		low, high := 0, len(lineOffsets)-1
+		line := 1
+		for low <= high {
+			mid := (low + high) / 2
+			if lineOffsets[mid] <= byteOffset {
+				line = mid + 1
+				low = mid + 1
+			} else {
+				high = mid - 1
 			}
 		}
-		return 1
+		return line
 	}
 
 	// 1. Locate blocTest invocations
@@ -69,7 +79,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		unit := parser.TestUnit{
 			Name:       testName,
 			FilePath:   filePath,
-			StartLine:  findLine(testName),
+			StartLine:  offsetToLine(m[0]),
 			Kind:       "bloc",
 			RawBody:    argsBody,
 			Assertions: []string{"blocTest.expect"},
@@ -95,11 +105,17 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 			break
 		}
 
-		testName := src[offset+loc[2] : offset+loc[3]]
-		cbStart := offset + loc[4]
-		openBrace := offset + loc[5] - 1
+		var testName string
+		if loc[2] != -1 {
+			testName = src[offset+loc[2] : offset+loc[3]]
+		} else {
+			testName = src[offset+loc[4] : offset+loc[5]]
+		}
 
-		closeBrace := findMatchingBrace(src, openBrace)
+		cbStart := offset + loc[6]
+		openBrace := offset + loc[7] - 1
+
+		closeBrace := parser.FindMatchingBrace(src, openBrace)
 		if closeBrace == -1 {
 			offset += loc[1]
 			continue
@@ -116,7 +132,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		unit := parser.TestUnit{
 			Name:       testName,
 			FilePath:   filePath,
-			StartLine:  findLine(testName),
+			StartLine:  offsetToLine(offset + loc[0]),
 			Kind:       "unit",
 			RawBody:    body,
 			Assertions: assertions,
@@ -129,91 +145,3 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	return units, nil
 }
 
-// findMatchingBrace returns the index of the matching closing brace for the
-// opening curly brace at openIndex, correctly skipping string literals and comments.
-func findMatchingBrace(src string, openIndex int) int {
-	if openIndex < 0 || openIndex >= len(src) || src[openIndex] != '{' {
-		return -1
-	}
-
-	braceCount := 0
-	n := len(src)
-
-	for i := openIndex; i < n; i++ {
-		if i+1 < n && src[i] == '/' && src[i+1] == '/' {
-			i += 2
-			for i < n && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-
-		if i+1 < n && src[i] == '/' && src[i+1] == '*' {
-			i += 2
-			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
-				i++
-			}
-			i++
-			continue
-		}
-
-		if (src[i] == 'r' || src[i] == 'R') && i+1 < n && (src[i+1] == '\'' || src[i+1] == '"') {
-			quote := src[i+1]
-			if i+3 < n && src[i+2] == quote && src[i+3] == quote {
-				i += 4
-				for i+2 < n && !(src[i] == quote && src[i+1] == quote && src[i+2] == quote) {
-					i++
-				}
-				i += 2
-				continue
-			}
-			i += 2
-			for i < n && src[i] != quote && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-
-		if (src[i] == '\'' || src[i] == '"') && i+2 < n && src[i+1] == src[i] && src[i+2] == src[i] {
-			quote := src[i]
-			i += 3
-			for i+2 < n {
-				if src[i] == '\\' {
-					i += 2
-					continue
-				}
-				if src[i] == quote && src[i+1] == quote && src[i+2] == quote {
-					i += 2
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		if src[i] == '\'' || src[i] == '"' {
-			quote := src[i]
-			i++
-			for i < n && src[i] != quote {
-				if src[i] == '\\' {
-					i++
-				} else if src[i] == '\n' {
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		if src[i] == '{' {
-			braceCount++
-		} else if src[i] == '}' {
-			braceCount--
-			if braceCount == 0 {
-				return i
-			}
-		}
-	}
-
-	return -1
-}
