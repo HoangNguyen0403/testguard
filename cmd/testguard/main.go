@@ -24,7 +24,8 @@ func main() {
 	var jsonMode bool
 	var format string
 	var outputFile string
-
+	var summaryMode bool
+	var topIssues int
 	rootCmd := &cobra.Command{
 		Use:   "testguard [paths...]",
 		Short: "Standalone polyglot test quality & architectural boundary guard CLI",
@@ -78,13 +79,15 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 
 			// Default terminal scorecard
 			term := reporter.NewTerminalReporter(os.Stdout)
-			exitCode := term.Render(res.Violations, res.ScannedFiles, res.ParseErrors, res.Skipped)
-
-			// Auto-save markdown report
 			outPath := outputFile
 			if outPath == "" {
 				outPath = ".testguard/report.md"
 			}
+			exitCode := term.RenderWithOptions(res.Violations, res.ScannedFiles, res.ParseErrors, res.Skipped, reporter.TerminalOptions{
+				SummaryOnly: summaryMode,
+				MaxDisplay:  topIssues,
+				ReportPath:  outPath,
+			})
 			_ = reporter.WriteMarkdownReport(outPath, res.Violations, res.ScannedFiles, res.ParseErrors, res.Skipped)
 
 			if exitCode != 0 {
@@ -101,6 +104,8 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 	rootCmd.Flags().BoolVar(&jsonMode, "json", false, "Output machine-readable JSON (equivalent to -f json)")
 	rootCmd.Flags().StringVarP(&format, "format", "f", "console", "Output format: console, json, azure")
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Path to export markdown scorecard (default: .testguard/report.md)")
+	rootCmd.Flags().BoolVarP(&summaryMode, "summary", "s", false, "Output high-level monorepo/module summary without file dumps")
+	rootCmd.Flags().IntVar(&topIssues, "top", 10, "Maximum number of individual findings to display in terminal")
 
 	// Subcommand: explain
 	explainCmd := &cobra.Command{

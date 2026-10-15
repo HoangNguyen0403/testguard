@@ -75,3 +75,77 @@ func TestAzureDevOpsLogger(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, out)
 	}
 }
+
+func TestTerminalReporterMonorepoBreakdown(t *testing.T) {
+	violations := []models.Violation{
+		{
+			RuleID:     "GUARD-REACT-02",
+			Severity:   models.SeverityBlocker,
+			FilePath:   "datasource/ezrx/frontend/src/app.test.tsx",
+			LineNumber: 10,
+			Message:    "Timer sleep fragility.",
+		},
+		{
+			RuleID:     "GUARD-GO-03",
+			Severity:   models.SeverityAdvisory,
+			FilePath:   "datasource/ezrx/order-engine/order_test.go",
+			LineNumber: 42,
+			Message:    "Duplicate table row.",
+		},
+		{
+			RuleID:     "GUARD-DART-UNCOVERED-MUTATION",
+			Severity:   models.SeverityBlocker,
+			FilePath:   "datasource/ezrx/eZRx-Mobile/test/bloc_test.dart",
+			LineNumber: 100,
+			Message:    "Uncovered mutation.",
+		},
+	}
+
+	var buf bytes.Buffer
+	r := reporter.NewTerminalReporter(&buf)
+	exitCode := r.RenderWithOptions(violations, 100, 0, 0, reporter.TerminalOptions{
+		SummaryOnly: false,
+		MaxDisplay:  10,
+	})
+
+	out := buf.String()
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(out, "MODULE BREAKDOWN:") {
+		t.Errorf("expected 'MODULE BREAKDOWN:' section in multi-module report")
+	}
+	if !strings.Contains(out, "ezrx/frontend") || !strings.Contains(out, "ezrx/order-engine") || !strings.Contains(out, "ezrx/eZRx-Mobile") {
+		t.Errorf("expected module names in breakdown table, got: %s", out)
+	}
+	if !strings.Contains(out, "TOP RULE VIOLATIONS:") {
+		t.Errorf("expected 'TOP RULE VIOLATIONS:' section in report")
+	}
+}
+
+func TestTerminalReporterSummaryOnly(t *testing.T) {
+	violations := []models.Violation{
+		{
+			RuleID:     "GUARD-REACT-02",
+			Severity:   models.SeverityBlocker,
+			FilePath:   "datasource/ezrx/frontend/src/app.test.tsx",
+			LineNumber: 10,
+			Message:    "Timer sleep fragility.",
+		},
+	}
+
+	var buf bytes.Buffer
+	r := reporter.NewTerminalReporter(&buf)
+	_ = r.RenderWithOptions(violations, 10, 0, 0, reporter.TerminalOptions{
+		SummaryOnly: true,
+		ReportPath:  ".testguard/custom-report.md",
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "Summary mode: Full detailed violations written to .testguard/custom-report.md") {
+		t.Errorf("expected summary mode message, got: %s", out)
+	}
+	if strings.Contains(out, "KEY FINDINGS") {
+		t.Errorf("expected KEY FINDINGS to be omitted in SummaryOnly mode")
+	}
+}
