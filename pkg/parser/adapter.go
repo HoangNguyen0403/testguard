@@ -28,6 +28,14 @@ type TestUnit struct {
 	SeedBody   string   `json:"seed_body,omitempty"`
 	ActBody    string   `json:"act_body,omitempty"`
 	ExpectBody string   `json:"expect_body,omitempty"`
+
+	// ASTDecl holds an optional language-specific AST declaration (e.g. *ast.FuncDecl for Go).
+	// Excluded from JSON serialization to maintain cross-language model contracts.
+	ASTDecl any `json:"-"`
+	// FileSet holds an optional token.FileSet for AST source position resolution.
+	FileSet any `json:"-"`
+	// FileImports holds an optional map of local package names/aliases to canonical import paths.
+	FileImports map[string]string `json:"-"`
 }
 
 // LanguageAdapter decouples the core engine from language-specific AST structures.

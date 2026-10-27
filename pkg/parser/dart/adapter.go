@@ -2,6 +2,7 @@ package dart
 
 import (
 	"bytes"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -11,10 +12,10 @@ import (
 var (
 	blocTestRegex       = regexp.MustCompile(`(?s)blocTest\s*(?:<[^>]+>)?\s*\(\s*['"]([^'"]+)['"]\s*,\s*(.*?)\);\s*(?:\n|$)`)
 	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
-	seedRegex     = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
-	actRegex      = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
-	expectRegex   = regexp.MustCompile(`(?s)\bexpect\s*:\s*\(\)\s*=>\s*(\[.*?\])\s*,`)
-	assertionRegex = regexp.MustCompile(`\b(expect|expectLater|verify|verifyNever|verifyInOrder)\s*\(`)
+	seedRegex           = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
+	actRegex            = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
+	expectRegex         = regexp.MustCompile(`(?s)\bexpect\s*:\s*\(\)\s*=>\s*(\[.*?\])\s*,`)
+	assertionRegex      = regexp.MustCompile(`\b(expect|expectLater|verify|verifyNever|verifyInOrder)\s*\(`)
 )
 
 // Adapter implements the parser.LanguageAdapter for Dart.
@@ -117,8 +118,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 
 		closeBrace := parser.FindMatchingBrace(src, openBrace)
 		if closeBrace == -1 {
-			offset += loc[1]
-			continue
+			return nil, fmt.Errorf("malformed test callback: unmatched brace in %s starting at line %d", filePath, offsetToLine(openBrace))
 		}
 
 		body := src[cbStart : closeBrace+1]
@@ -144,4 +144,3 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 
 	return units, nil
 }
-

@@ -197,3 +197,20 @@ void main() {
 		})
 	}
 }
+
+func TestLocateTestsUnmatchedBraceError(t *testing.T) {
+	source := []byte(`
+void main() {
+  test('broken callback test', () {
+    expect(1, 1);
+    // missing closing brace
+`)
+	adapter := dart.NewAdapter()
+	_, err := adapter.LocateTests(source, "broken_test.dart")
+	if err == nil {
+		t.Fatalf("expected error for unmatched callback brace, got nil")
+	}
+	if !strings.Contains(err.Error(), "unmatched brace") {
+		t.Errorf("expected error message mentioning unmatched brace, got %v", err)
+	}
+}
