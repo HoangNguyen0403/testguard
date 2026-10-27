@@ -186,20 +186,25 @@ func TestEnginePathDeduplication(t *testing.T) {
 }
 
 func TestEngineStableScopeAcrossPathSpellings(t *testing.T) {
-	tmpDir := t.TempDir()
-	testFile := filepath.Join(tmpDir, "sample_test.go")
-	_ = os.WriteFile(testFile, []byte("package test\nimport \"testing\"\nfunc TestSample(t *testing.T) {\n  if 1 != 1 { t.Fatal(\"fail\") }\n}\n"), 0644)
-
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("unable to resolve cwd: %v", err)
 	}
+	// In environments where tmpDir and cwd reside on different drives (e.g. Windows C: vs D:),
+	// filepath.Rel cannot bridge drives. Use a local temp dir inside cwd.
+	tmpDir, err := os.MkdirTemp(cwd, "testguard_spellings_*")
+	if err != nil {
+		t.Fatalf("unable to create local temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	testFile := filepath.Join(tmpDir, "sample_test.go")
+	_ = os.WriteFile(testFile, []byte("package test\nimport \"testing\"\nfunc TestSample(t *testing.T) {\n  if 1 != 1 { t.Fatal(\"fail\") }\n}\n"), 0644)
+
 	rel, err := filepath.Rel(cwd, testFile)
 	if err != nil {
 		t.Fatalf("unable to express fixture relative to cwd: %v", err)
 	}
 	wantFile := filepath.ToSlash(rel)
-
 	spellings := []string{testFile, rel, "." + string(filepath.Separator) + rel}
 	eng := engine.New()
 	for _, spelling := range spellings {

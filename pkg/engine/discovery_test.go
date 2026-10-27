@@ -177,16 +177,27 @@ func TestDiscoverScopeOverlappingRootsDeduplication(t *testing.T) {
 		t.Errorf("expected exactly 1 candidate file, got %d", len(resOverlap.CandidateFiles))
 	}
 
-	// 2. Relative + Absolute overlap of the same fixture, whatever the cwd.
+	// 2. Relative + Absolute overlap of the same fixture.
+	// In environments where tmpDir and cwd reside on different Windows drives (e.g. C: vs D:),
+	// filepath.Rel cannot bridge drives; construct a fixture within cwd to test relative/absolute overlap.
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("unable to resolve cwd: %v", err)
 	}
-	relTestFile, err := filepath.Rel(cwd, testFile)
+	overlapDir, err := os.MkdirTemp(cwd, "testguard_overlap_*")
+	if err != nil {
+		t.Fatalf("unable to create local temp dir: %v", err)
+	}
+	defer os.RemoveAll(overlapDir)
+	localTestFile := filepath.Join(overlapDir, "sample_test.go")
+	if err := os.WriteFile(localTestFile, []byte("package test\n"), 0644); err != nil {
+		t.Fatalf("unable to write local fixture: %v", err)
+	}
+	relTestFile, err := filepath.Rel(cwd, localTestFile)
 	if err != nil {
 		t.Fatalf("unable to express fixture relative to cwd: %v", err)
 	}
-	resMixed := engine.DiscoverScope([]string{testFile, relTestFile}, adapter, nil)
+	resMixed := engine.DiscoverScope([]string{localTestFile, relTestFile}, adapter, nil)
 	if resMixed.InputFailure {
 		t.Errorf("mixed spellings must resolve to one existing file, got diagnostics %+v", resMixed.Diagnostics)
 	}
