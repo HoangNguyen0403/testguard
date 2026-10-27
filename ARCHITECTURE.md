@@ -222,4 +222,4 @@ TestGuard operates exclusively as a static AST token and syntax analyzer.
 - **Observation-First Rollout**: Integrations in CI pipelines should run in observation-only mode (`continue-on-error: true` or non-blocking PR annotations) during baseline collection and rule calibration.
 - **Promotion to Blocking**: Transitioning to a blocking gate requires explicit human owner approval and historical calibration evidence.
 - **Rollback Ownership**: In the event of high false alarms or pipeline failure, the rollback procedure is to disable the blocking check while retaining report artifact collection and existing unrelated gates. Never convert missing reports or tool error exits into passing status.
-- **Specification Boundary**: The v0.2.0 contract describes an unreleased breaking release boundary.
+- **Specification Boundary**: The v0.1.4 contract describes an unreleased release boundary.

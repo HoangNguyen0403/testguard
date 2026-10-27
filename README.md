@@ -79,7 +79,7 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
   "schema_version": 1,
   "tool": {
     "name": "testguard",
-    "version": "0.2.0",
+    "version": "0.1.4",
     "commit": null,
     "built_at": null
   },
@@ -119,7 +119,7 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 - **Static Heuristics Only**: TestGuard inspects static AST token structures and syntactic patterns. It does not execute tests, invoke dynamic mutation testing harnesses, or verify runtime behavioral correctness.
 - **No Production Assurance Claims**: TestGuard provides local-untrusted linting and anti-pattern detection; it does not certify production reliability or complete fault coverage.
 - **Observation-First Adoption**: Teams should deploy TestGuard in CI under observation-only (non-blocking) mode. Activating blocking gates requires human owner review and calibrated baseline results. Rollback ownership is explicit: disable the blocking gate while retaining reporting artifacts; never convert missing evidence into success.
-- **Unreleased Contract Boundary**: The 0.2.0 envelope and exit code semantics represent an unreleased specification boundary.
+- **Unreleased Contract Boundary**: The 0.1.4 envelope and exit code semantics represent an unreleased specification boundary.
 
 ---
 

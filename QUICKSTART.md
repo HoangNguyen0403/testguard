@@ -85,7 +85,7 @@ test/application/account/customer_code_bloc_test.dart:497:1
 ### Full Mode Execution
 TestGuard executes full target audits across all discovered test files (`effective_mode: "full"`).
 
-> ⚠️ **Note on `--diff` / `-d`**: The `--diff` flag is unsupported in TestGuard 0.2.0 and is explicitly rejected with exit code `2` (`invalid_usage`). Scans do not calculate git diffs; they analyze target files in full.
+> ⚠️ **Note on `--diff` / `-d`**: The `--diff` flag is unsupported in TestGuard 0.1.4 and is explicitly rejected with exit code `2` (`invalid_usage`). Scans do not calculate git diffs; they analyze target files in full.
 
 To target a specific directory or individual test file during development:
 
@@ -212,13 +212,13 @@ TestGuard produces a single, top-level versioned `ScanReport` envelope on `stdou
 
 ### Migration from Bare Array to Versioned Envelope
 
-In earlier unversioned releases, TestGuard emitted a bare array of violations (`[]`). In v0.2.0, output is wrapped in a versioned envelope:
+In earlier unversioned releases, TestGuard emitted a bare array of violations (`[]`). In v0.1.4, output is wrapped in a versioned envelope:
 
 ```bash
 # ❌ DEPRECATED (0.1.x bare array pattern):
 # jq '.[] | select(.severity=="Blocker")' audit.json
 
-# ✅ v0.2.0 Versioned Envelope Pattern:
+# ✅ v0.1.4 Versioned Envelope Pattern:
 # 1. Verify schema version and check if analysis completed successfully
 jq -e '.schema_version == 1 and .analysis.status == "complete"' audit.json > /dev/null || {
   echo "Notice: Scan incomplete, failed, or schema incompatible; inspecting diagnostics and retained findings" >&2
@@ -342,4 +342,4 @@ exit "$scan_exit"
 
 - **Static Pattern Matching**: TestGuard uses static AST token analysis and pattern recognition. It does **not** execute test suites or run dynamic mutation testing.
 - **No Production Assurance Claims**: TestGuard does not certify that tests kill production bugs or satisfy behavioral correctness.
-- **Unreleased Contract Boundary**: The v0.2.0 JSON envelope, exit code precedence, and `--allow-empty` boundary represent an unreleased specification. Do not claim published or released status.
+- **Unreleased Contract Boundary**: The v0.1.4 JSON envelope, exit code precedence, and `--allow-empty` boundary represent an unreleased specification. Do not claim published or released status.

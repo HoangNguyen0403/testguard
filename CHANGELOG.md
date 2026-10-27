@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
-## [0.2.0] - Unreleased
+## [0.1.4] - Unreleased
 
 ### Breaking Changes
 - **Versioned Machine-Readable JSON Envelope (`schema_version: 1`)**:
@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Exit `2`: Incomplete analysis or usage error (`incomplete` or `error`). Triggered by invalid arguments, `--diff` rejection, file read/traversal/parse failures, explicit unsupported file targets, or empty test scope without `--allow-empty`.
   - Exit `3`: Explicitly not applicable (`not_applicable / empty_allowed`). Triggered when the target scope contains zero test declarations AND `--allow-empty` is supplied, with zero findings. Exit 3 is distinct from pass.
 - **`--diff` / `-d` Flag Unsupported**:
-  - Invoking `testguard --diff` or `testguard -d` is not implemented in 0.2.0 and is explicitly rejected with exit code 2 (`invalid_usage`). Effective scan mode is full target scan (`effective_mode: "full"`).
+  - Invoking `testguard --diff` or `testguard -d` is not implemented in 0.1.4 and is explicitly rejected with exit code 2 (`invalid_usage`). Effective scan mode is full target scan (`effective_mode: "full"`).
 - **Flag Combination Rejections**:
   - Combining `--json` with `-f azure` is rejected with exit code 2 (`invalid_usage`).
   - Explicit `--output` (including empty values like `--output=""`) with `--json` or `-f azure` is rejected with exit code 2 (`invalid_usage`).
@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Static Pattern Matching**:
   - TestGuard operates via static AST token and syntax heuristics; it does not execute test suites, run dynamic mutation testing engines, or evaluate runtime behavioral correctness.
 - **Checkpoint Evidence Status**:
-  - This entry documents the unreleased v0.2.0 specification boundary at a local documentation checkpoint. Remote CI, release publication, and pilot evaluations have not yet run or passed.
+  - This entry documents the unreleased v0.1.4 specification boundary at a local documentation checkpoint. Remote CI, release publication, and pilot evaluations have not yet run or passed.
 
 ---
 ## [0.1.3] - 2026-10-15
