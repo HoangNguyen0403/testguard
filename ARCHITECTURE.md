@@ -9,9 +9,8 @@ This document outlines the architectural boundaries, package structure, executio
 1. **Unidirectional Dependency Flow**: Dependencies flow strictly downward from the CLI presentation layer into the headless engine, which in turn depends on adapters, detectors, rules, and pure models.
 2. **Headless Engine Core**: `pkg/engine` has zero direct dependencies on terminal formatting, ANSI escapes, or stdout/stderr printing. Progress and reporting are decoupled via callbacks and interfaces.
 3. **Clean I/O Stream Separation**:
-   - `os.Stdout`: Dedicated solely to report output (terminal scorecard, markdown, or machine-readable JSON).
-   - `os.Stderr`: Used exclusively for interactive in-progress indicators (live spinner, file counter) and error messages. This guarantees `testguard --json | jq .` is always safe for Unix pipelines.
-4. **Zero-Dependency Footprint**: The binary remains statically linked, sub-10MB, and lightweight (relying only on Cobra/pflag and Go standard library).
+   - `os.Stdout`: Dedicated solely to report output (terminal scorecard, markdown, or machine-readable `ScanReport` JSON envelope with `schema_version: 1`).
+   - `os.Stderr`: Used exclusively for interactive in-progress indicators (live spinner, file counter) and diagnostics/errors. In `--json` mode, progress indicators are silenced to guarantee `testguard --json | jq .` is safe for Unix pipelines.
 5. **Why-Over-What Commenting**: Code expresses *what* and *how*; docstrings and comments strictly explain *why* (architectural invariants, domain quirks, non-obvious AST edges).
 
 ---
@@ -40,7 +39,7 @@ pkg/updater/                 # Self-updating mechanism via GitHub Releases API
 | `pkg/parser` | Defines `LanguageAdapter` interface and `TestUnit` AST representations. | Implementations must handle malformed syntax without crashing. |
 | `pkg/detectors` | Language-agnostic smells: test cloning (`clone`), vague naming (`naming`), missing assertions (`zeroassert`). | Operates on generic token streams or `TestUnit` abstractions. |
 | `pkg/rules` | Language- and framework-specific rules: Flutter BLoC, Go Clean Architecture ports, React timers, NestJS. | Grouped by language (`rules/dart`, `rules/golang`, `rules/typescript`, `rules/mobile`). |
-| `pkg/models` | Core data structures: `Violation`, `Severity`, `Suppression`. | Pure leaf package. **Must never import other `pkg/` packages**. |
+| `pkg/models` | Core data structures: `Violation`, `Severity`, `Suppression`, `ScanReport`. | Pure leaf package. **Must never import other `pkg/` packages**. |
 | `pkg/reporter` | Output rendering: `TerminalReporter`, `AzureReporter`, `JSONReport`, `ProgressReporter`. | Handles TTY detection, `NO_COLOR`, and line clearing (`\r\033[2K`). |
 | `pkg/docs` | Built-in rule explainers (`Explain()`, `AllRules()`). | Must keep descriptions, remediation steps, and code examples synchronized with rules. |
 
@@ -142,3 +141,85 @@ TestGuard provides live visual progress during both discovery and scanning witho
 - **Public Boundaries**: All exported structs, interfaces, methods, and functions require clear GoDoc comments describing purpose, parameters, and return expectations.
 - **No Inline Commentary Clutter**: Internal function bodies must be self-documenting with intention-revealing names. Never include step narrations (`// Step 1: ...`), echo comments, or dead code.
 - **Race Safety**: Any background goroutines (such as `ProgressReporter` tickers) must synchronize state access via `sync.Mutex` and provide explicit shutdown channels (`done`, `doneAck`) verified by `go test -race ./...`.
+
+---
+
+## 7. Machine-Readable ScanReport Contract & Exit Precedence
+
+### Envelope Specification (`schema_version: 1`)
+
+In `--json` mode, TestGuard outputs a single versioned `ScanReport` JSON object to `stdout`:
+
+```ts
+type ScanReport = {
+  schema_version: 1;
+  tool: {
+    name: "testguard";
+    version: string;
+    commit: string | null;
+    built_at: string | null;
+  };
+  scope: {
+    requested_paths: string[];
+    effective_mode: "full"; // diff is not implemented
+    files: string[];        // sorted unique analyzed files (cwd-relative slash paths)
+    excluded: { path: string; reason: "default_directory" | "generated" | "non_test" }[];
+    unsupported: string[];  // explicit unsupported target file paths
+    config_applied: false;  // config files (e.g. testguard.yaml) are not applied
+  };
+  analysis: {
+    status: "complete" | "incomplete" | "not_applicable" | "error";
+    reason: "analyzed" | "input_failure" | "empty_scope" | "empty_allowed" | "unsupported_scope" | "invalid_usage" | "output_failure";
+    discovered_files: number;
+    analyzed_files: number;
+    analyzed_tests: number;
+    failed_files: number;
+  };
+  findings: Violation[];    // retained violations; severity: Blocker, Warning, Advisory
+  diagnostics: { code: string; path: string | null; message: string }[];
+  policy: {
+    blocker_count: number;
+    status: "no_blocker" | "blocker_found";
+  };
+  exit_code: 0 | 1 | 2 | 3;
+};
+```
+
+### Structural Invariants
+
+1. **Completeness vs. Policy Decoupling**: `analysis.status` records execution completeness (`complete`, `incomplete`, `not_applicable`, `error`). `policy.status` records compliance based solely on retained findings (`no_blocker`, `blocker_found`).
+2. **Empty Arrays**: Fields `files`, `excluded`, `unsupported`, `findings`, and `diagnostics` are serialized as `[]`, never `null`.
+3. **Full Scope & Diff Rejection**: Scans operate with `effective_mode: "full"`. Supplying `--diff` or `-d` is unsupported and rejected with exit code 2 (`invalid_usage`).
+4. **Unapplied Configuration**: `scope.config_applied` is explicitly `false`; repository configuration files are not parsed or applied.
+5. **Stable Diagnostic Codes**: `invalid_usage`, `target_unreadable`, `traversal_failed`, `read_failed`, `parse_failed`, `unsupported_input`, `empty_scope`, `output_failed`.
+6. **Flag Compatibility Constraints**:
+   - `--json` with `-f azure` is rejected with exit code 2 (`invalid_usage`).
+   - Explicit `--output` (including empty `--output=""`) in `--json` or `-f azure` mode is rejected with exit code 2 (`invalid_usage`).
+7. **Retained Findings Survival**: Any violations discovered before an error or input failure are preserved in `.findings` for diagnostic purposes. However, an absence of findings can only be treated as clean verification when `analysis.status` is verified to be `complete` (exit 0).
+### Deterministic Exit Precedence
+
+| Precedence | Condition | `analysis.status` / `reason` | Exit Code | Findings Handling |
+|---|---|---|---|---|
+| 1 (Highest) | Invalid CLI usage / unsupported `--diff` / output write failure | `error / invalid_usage` or `output_failure` | `2` | Retain any collected findings |
+| 2 | Traversal / file read / parser failure | `incomplete / input_failure` | `2` | Retain all collected findings |
+| 3 | Explicit unsupported file target | `incomplete / unsupported_scope` | `2` | Retain all collected findings |
+| 4 | Zero test declarations found; no errors; `--allow-empty` absent | `incomplete / empty_scope` | `2` | Retain findings; cannot pass |
+| 5 | Zero test declarations found; `--allow-empty` present; zero findings | `not_applicable / empty_allowed` | `3` | `[]` (explicitly inapplicable) |
+| 6 | Zero test declarations found with findings under `--allow-empty` | `incomplete / empty_scope` | `2` | Retain findings |
+| 7 | Nonempty complete analysis with blocker violations | `complete / analyzed` | `1` | Retain findings |
+| 8 (Lowest) | Nonempty complete analysis without blocker violations | `complete / analyzed` | `0` | Retain warnings/advisories |
+
+---
+
+## 8. Operational Boundaries, Rollout, and Heuristic Limits
+
+### Static Heuristic Limits (No Mutation Execution)
+TestGuard operates exclusively as a static AST token and syntax analyzer.
+- It **does not execute** test suites, measure dynamic code coverage, run dynamic mutation engines, or evaluate test execution oracles.
+- It **cannot prove** that a test suite detects real runtime faults or provides production assurance.
+
+### Observation-First Adoption & Rollback Architecture
+- **Observation-First Rollout**: Integrations in CI pipelines should run in observation-only mode (`continue-on-error: true` or non-blocking PR annotations) during baseline collection and rule calibration.
+- **Promotion to Blocking**: Transitioning to a blocking gate requires explicit human owner approval and historical calibration evidence.
+- **Rollback Ownership**: In the event of high false alarms or pipeline failure, the rollback procedure is to disable the blocking check while retaining report artifact collection and existing unrelated gates. Never convert missing reports or tool error exits into passing status.
+- **Specification Boundary**: The v0.2.0 contract describes an unreleased breaking release boundary.

@@ -28,9 +28,9 @@ func NewTerminalReporter(out io.Writer) *TerminalReporter {
 	return &TerminalReporter{out: out}
 }
 
-// Render writes the formatted scorecard and findings to stdout and returns the exit code.
-func (r *TerminalReporter) Render(violations []models.Violation, scannedFiles, parseErrors, skipped int) int {
-	return r.RenderWithOptions(violations, scannedFiles, parseErrors, skipped, TerminalOptions{
+// Render writes the formatted scorecard and findings to stdout and returns the exit code and any write error.
+func (r *TerminalReporter) Render(report *models.ScanReport) (int, error) {
+	return r.RenderWithOptions(report, TerminalOptions{
 		MaxDisplay: 10,
 		ReportPath: ".testguard/report.md",
 	})
@@ -86,13 +86,38 @@ func extractModule(filePath string) string {
 }
 
 // RenderWithOptions renders the scorecard with monorepo module breakdown and summary controls.
-func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scannedFiles, parseErrors, skipped int, opts TerminalOptions) int {
+func (r *TerminalReporter) RenderWithOptions(report *models.ScanReport, opts TerminalOptions) (int, error) {
+	if report == nil {
+		return 2, fmt.Errorf("scan report is nil")
+	}
 	if opts.MaxDisplay <= 0 {
 		opts.MaxDisplay = 10
 	}
 	if opts.ReportPath == "" {
 		opts.ReportPath = ".testguard/report.md"
 	}
+	// A prior Markdown export failure means the report path holds no artifact;
+	// never advertise omitted details as written.
+	exportFailed := report.Analysis.Reason == "output_failure"
+
+	var writeErr error
+	printf := func(format string, a ...interface{}) {
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintf(r.out, format, a...)
+	}
+	println := func(a ...interface{}) {
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintln(r.out, a...)
+	}
+
+	violations := report.Findings
+	scannedFiles := report.Analysis.AnalyzedFiles
+	parseErrors := report.Analysis.FailedFiles
+	skipped := len(report.Scope.Excluded)
 
 	blockers := 0
 	warnings := 0
@@ -129,25 +154,63 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 		ruleCounts[v.RuleID]++
 	}
 
-	status := "PASSED"
-	if blockers > 0 {
-		status = "FAILED"
+	if report.Analysis.Status == "not_applicable" {
+		printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		printf("🛡️ TestGuard Audit · Status: NOT APPLICABLE (%s/%s)\n", report.Analysis.Status, report.Analysis.Reason)
+		printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+		printf("✨ Scope explicitly allows empty test set; no tests analyzed.\n")
+		if writeErr != nil {
+			return 2, writeErr
+		}
+		return report.ExitCode, nil
 	}
 
-	fmt.Fprintf(r.out, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	if len(moduleMap) > 1 {
-		fmt.Fprintf(r.out, "🛡️ TestGuard Monorepo Audit · %d files scanned across %d modules\n", scannedFiles, len(moduleMap))
-	} else {
-		fmt.Fprintf(r.out, "🛡️ TestGuard Audit · %d files scanned · %d Parse Errors · %d Skipped\n", scannedFiles, parseErrors, skipped)
+	var status string
+	switch report.Analysis.Status {
+	case "complete":
+		if blockers > 0 {
+			status = "FAILED (complete/analyzed)"
+		} else {
+			status = "PASSED (complete/analyzed)"
+		}
+	case "incomplete":
+		status = fmt.Sprintf("INCOMPLETE (%s/%s)", report.Analysis.Status, report.Analysis.Reason)
+	case "error":
+		status = fmt.Sprintf("ERROR (%s/%s)", report.Analysis.Status, report.Analysis.Reason)
+	default:
+		status = fmt.Sprintf("%s (%s)", strings.ToUpper(report.Analysis.Status), report.Analysis.Reason)
 	}
-	fmt.Fprintf(r.out, "Status: %s · 🚨 %d Blocker(s) · ⚠️ %d Warning(s) · 💡 %d Advisory(ies)\n", status, blockers, warnings, advisories)
-	fmt.Fprintf(r.out, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	if len(moduleMap) > 1 {
+		printf("🛡️ TestGuard Monorepo Audit · %d files scanned across %d modules\n", scannedFiles, len(moduleMap))
+	} else {
+		printf("🛡️ TestGuard Audit · %d files scanned · %d Parse Errors · %d Skipped\n", scannedFiles, parseErrors, skipped)
+	}
+	printf("Status: %s · 🚨 %d Blocker(s) · ⚠️ %d Warning(s) · 💡 %d Advisory(ies)\n", status, blockers, warnings, advisories)
+	printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	if len(report.Diagnostics) > 0 {
+		printf("DIAGNOSTICS:\n")
+		for _, d := range report.Diagnostics {
+			if d.Path != nil && *d.Path != "" {
+				printf("  ❌ [%s] %s: %s\n", d.Code, *d.Path, d.Message)
+			} else {
+				printf("  ❌ [%s] %s\n", d.Code, d.Message)
+			}
+		}
+		println()
+	}
 
 	if len(violations) == 0 {
-		fmt.Fprintf(r.out, "✨ All tests adhere to boundary and quality standards!\n")
-		return 0
+		if report.Analysis.Status == "complete" {
+			printf("✨ All tests adhere to boundary and quality standards!\n")
+		}
+		if writeErr != nil {
+			return 2, writeErr
+		}
+		return report.ExitCode, nil
 	}
-
 	// 1. Render Module Breakdown if monorepo / multi-module
 	if len(moduleMap) > 1 {
 		var modules []*moduleStats
@@ -168,9 +231,9 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 			return modules[i].name < modules[j].name
 		})
 
-		fmt.Fprintf(r.out, "📦 MODULE BREAKDOWN:\n")
-		fmt.Fprintf(r.out, "%-36s %10s %10s %12s   %s\n", "Module / Sub-Project", "Blockers", "Warnings", "Advisories", "Status")
-		fmt.Fprintf(r.out, "─────────────────────────────────────────────────────────────────────────────\n")
+		printf("📦 MODULE BREAKDOWN:\n")
+		printf("%-36s %10s %10s %12s   %s\n", "Module / Sub-Project", "Blockers", "Warnings", "Advisories", "Status")
+		printf("─────────────────────────────────────────────────────────────────────────────\n")
 		for _, m := range modules {
 			modStatus := "✅ PASSED"
 			if m.blockers > 0 {
@@ -180,9 +243,9 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 			} else if m.advisories > 0 {
 				modStatus = "💡 ADVISORY"
 			}
-			fmt.Fprintf(r.out, "%-36s %10d %10d %12d   %s\n", m.name, m.blockers, m.warnings, m.advisories, modStatus)
+			printf("%-36s %10d %10d %12d   %s\n", m.name, m.blockers, m.warnings, m.advisories, modStatus)
 		}
-		fmt.Fprintf(r.out, "─────────────────────────────────────────────────────────────────────────────\n\n")
+		printf("─────────────────────────────────────────────────────────────────────────────\n\n")
 	}
 
 	// 2. Render Top Rule Violations
@@ -202,22 +265,26 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 	if len(rules) < topRuleLimit {
 		topRuleLimit = len(rules)
 	}
-	fmt.Fprintf(r.out, "🔥 TOP RULE VIOLATIONS:\n")
+	printf("🔥 TOP RULE VIOLATIONS:\n")
 	for i := range topRuleLimit {
-		fmt.Fprintf(r.out, "  • %-30s %5d occurrence(s)\n", rules[i].ruleID, rules[i].count)
+		printf("  • %-30s %5d occurrence(s)\n", rules[i].ruleID, rules[i].count)
 	}
-	fmt.Fprintln(r.out)
+	println()
 
 	// If SummaryOnly mode, skip individual file listings
 	if opts.SummaryOnly {
-		fmt.Fprintf(r.out, "✨ Summary mode: Full detailed violations written to %s\n", opts.ReportPath)
+		if exportFailed {
+			printf("✨ Summary mode: detailed violations were not exported because the report could not be written.\n")
+		} else {
+			printf("✨ Summary mode: Full detailed violations written to %s\n", opts.ReportPath)
+		}
 		if len(moduleMap) > 1 {
-			fmt.Fprintf(r.out, "💡 Tip: Run 'testguard path/to/module' to inspect a specific service.\n")
+			printf("💡 Tip: Run 'testguard path/to/module' to inspect a specific service.\n")
 		}
-		if blockers > 0 {
-			return 1
+		if writeErr != nil {
+			return 2, writeErr
 		}
-		return 0
+		return report.ExitCode, nil
 	}
 
 	// 3. Render Top Findings (capped to avoid terminal flooding)
@@ -235,16 +302,20 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 		return severityWeight(violations[i].Severity) < severityWeight(violations[j].Severity)
 	})
 
-	fmt.Fprintf(r.out, "🔍 KEY FINDINGS (Top %d):\n", opts.MaxDisplay)
+	printf("🔍 KEY FINDINGS (Top %d):\n", opts.MaxDisplay)
 
 	noColor := os.Getenv("NO_COLOR") != ""
 	displayed := 0
 	for _, v := range violations {
 		if displayed >= opts.MaxDisplay {
 			remaining := len(violations) - displayed
-			fmt.Fprintf(r.out, "... and %d more issue(s) written to %s\n", remaining, opts.ReportPath)
+			if exportFailed {
+				printf("... and %d more issue(s) not exported.\n", remaining)
+			} else {
+				printf("... and %d more issue(s) written to %s\n", remaining, opts.ReportPath)
+			}
 			if len(moduleMap) > 1 {
-				fmt.Fprintf(r.out, "💡 Tip: Run 'testguard <module-path>' to inspect a specific service, or 'testguard --summary'.\n")
+				printf("💡 Tip: Run 'testguard <module-path>' to inspect a specific service, or 'testguard --summary'.\n")
 			}
 			break
 		}
@@ -269,21 +340,21 @@ func (r *TerminalReporter) RenderWithOptions(violations []models.Violation, scan
 			}
 		}
 
-		fmt.Fprintf(r.out, "%s:%d:%d\n", v.FilePath, v.LineNumber, v.Column)
-		fmt.Fprintf(r.out, "  %s [%s] %s\n", icon, v.RuleID, v.Message)
+		printf("%s:%d:%d\n", v.FilePath, v.LineNumber, v.Column)
+		printf("  %s [%s] %s\n", icon, v.RuleID, v.Message)
 		if v.Suggestion != "" {
 			fixLabel := "💡 Fix:"
 			if noColor {
 				fixLabel = "Fix:"
 			}
-			fmt.Fprintf(r.out, "  %s %s\n", fixLabel, v.Suggestion)
+			printf("  %s %s\n", fixLabel, v.Suggestion)
 		}
-		fmt.Fprintln(r.out)
+		println()
 		displayed++
 	}
 
-	if blockers > 0 {
-		return 1
+	if writeErr != nil {
+		return 2, writeErr
 	}
-	return 0
+	return report.ExitCode, nil
 }

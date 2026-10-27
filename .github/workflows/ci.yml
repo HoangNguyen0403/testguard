@@ -59,4 +59,108 @@ jobs:
           "$BIN" explain GUARD-DART-SEED-ECHO
           "$BIN" explain GUARD-DART-UNCOVERED-MUTATION
           "$BIN" init
-          "$BIN" --all
+
+      - name: Observe full repository test quality scan (non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          BIN="./bin/testguard"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN="./bin/testguard.exe"
+          fi
+
+          if [ ! -f "$BIN" ]; then
+            echo "Error: TestGuard binary not found at $BIN" >&2
+            exit 2
+          fi
+
+          PYTHON="python3"
+          if ! command -v python3 >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+            PYTHON="python"
+          fi
+
+          # Capture actual binary exit safely under errexit
+          scan_exit=0
+          "$BIN" --all --json > testguard-report.json || scan_exit=$?
+
+          echo "$scan_exit" > testguard-scan-exit.txt
+          echo "TestGuard scan completed with process exit code: $scan_exit"
+
+          # Record binary SHA-256 and validate v1 JSON envelope
+          BIN_PATH="$BIN" SCAN_EXIT="$scan_exit" "$PYTHON" -c 'import sys, textwrap; exec(textwrap.dedent("""
+            import hashlib, json, os, pathlib, sys
+
+            bin_path = pathlib.Path(os.environ["BIN_PATH"])
+            h = hashlib.sha256(bin_path.read_bytes()).hexdigest()
+            pathlib.Path("testguard-binary-sha256.txt").write_text(f"{h}  {bin_path.name}\\n", encoding="utf-8")
+            print(f"TestGuard binary SHA-256: {h}")
+
+            scan_exit = int(os.environ["SCAN_EXIT"])
+            report_path = pathlib.Path("testguard-report.json")
+
+            if not report_path.is_file() or report_path.stat().st_size == 0:
+                sys.exit(f"Error: testguard-report.json is missing or empty (scan exit: {scan_exit})")
+
+            try:
+                with report_path.open("r", encoding="utf-8") as f:
+                    report = json.load(f)
+            except Exception as e:
+                sys.exit(f"Error: malformed JSON in testguard-report.json: {e}")
+
+            schema_ver = report.get("schema_version")
+            if schema_ver != 1:
+                sys.exit(f"Error: unexpected schema_version {schema_ver} (expected 1)")
+
+            tool = report.get("tool", {})
+            tool_name = tool.get("name")
+            if tool_name != "testguard":
+                sys.exit(f"Error: unexpected tool name {tool_name} (expected testguard)")
+
+            report_exit = report.get("exit_code")
+            if report_exit != scan_exit:
+                sys.exit(f"Error: exit code mismatch: process exit {scan_exit} != report exit_code {report_exit}")
+
+            analysis = report.get("analysis", {})
+            status = analysis.get("status")
+            reason = analysis.get("reason")
+            policy = report.get("policy", {})
+            policy_status = policy.get("status")
+            findings = report.get("findings", [])
+            diagnostics = report.get("diagnostics", [])
+
+            print(f"Scan Report Summary: schema_version={schema_ver}, status={status}, reason={reason}, exit_code={report_exit}")
+
+            if scan_exit == 0:
+                if status != "complete" or policy_status != "no_blocker":
+                    sys.exit(f"Error: inconsistent report for exit 0: status={status}, policy={policy_status}")
+                print("Observation verdict: COMPLETE (no blockers)")
+            elif scan_exit == 1:
+                if status != "complete" or policy_status != "blocker_found":
+                    sys.exit(f"Error: inconsistent report for exit 1: status={status}, policy={policy_status}")
+                blockers = policy.get("blocker_count", len([f for f in findings if f.get("severity") == "Blocker"]))
+                print(f"Observation verdict: COMPLETE WITH BLOCKERS ({blockers} blocker(s))")
+            elif scan_exit == 2:
+                if status not in ("incomplete", "error"):
+                    sys.exit(f"Error: inconsistent report for exit 2: status={status}, expected incomplete or error")
+                print(f"Observation verdict: INCOMPLETE OR ERROR (status={status}, reason={reason}, {len(diagnostics)} diagnostics, {len(findings)} retained findings)")
+            elif scan_exit == 3:
+                if status != "not_applicable":
+                    sys.exit(f"Error: inconsistent report for exit 3: status={status}, expected not_applicable")
+                print(f"Observation verdict: NOT APPLICABLE (status={status}, reason={reason})")
+            else:
+                sys.exit(f"Error: unknown scan exit code: {scan_exit}")
+          """))'
+
+          # Preserve truthful scan exit code (non-blocking via continue-on-error)
+          exit "$scan_exit"
+
+      - name: Upload TestGuard scan artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testguard-scan-artifacts-${{ matrix.os }}
+          path: |
+            testguard-report.json
+            testguard-scan-exit.txt
+            testguard-binary-sha256.txt
+          if-no-files-found: warn

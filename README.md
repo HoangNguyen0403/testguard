@@ -32,18 +32,94 @@ go install github.com/HoangNguyen0403/testguard/cmd/testguard@latest
 Run `testguard` inside any repository. It automatically discovers project types with **zero configuration**:
 
 ```bash
-# Day-to-day: Scan only your active branch/PR changes
-testguard --diff
-
-# Full audit: Scan all test files across all modules
+# Full audit: Scan all test files across all modules (effective mode: full)
 testguard --all
 
 # Target a specific folder or single test file
 testguard path/to/module/test/
 
+# Allow empty scope (returns exit 3: not_applicable if no test declarations are found)
+testguard --allow-empty path/to/empty/
+
+# Output versioned machine-readable JSON report
+testguard --json > audit.json
+
 # Explain a specific rule and remediation steps
 testguard explain GUARD-DART-SEED-ECHO
 ```
+
+### CLI Modes & Flags
+
+- **Full Scan Default**: Target directory or file inputs are audited in full (`effective_mode: "full"`).
+- **`--all` (`-a`)**: Force full scan across all candidate test files.
+- **`--allow-empty`**: Permits scanning targets with zero analyzable test declarations. Without this flag, discovering zero test declarations is considered an incomplete scan (exit `2`, `empty_scope`). With `--allow-empty`, an empty scan with no findings produces exit `3` (`not_applicable / empty_allowed`).
+- **`--diff` (`-d`) Unsupported**: The `--diff` flag is not implemented and is explicitly rejected with exit `2` (`invalid_usage`). Scans operate in full target mode.
+- **Configuration (`testguard.yaml`)**: Checked-in `testguard.yaml` files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
+- **Flag Compatibility Restrictions**:
+  - **`--json` with `-f azure` is Rejected**: Combining `--json` with `-f azure` is invalid usage (exit `2`, `invalid_usage`). `--json` is compatible only with default console mode or explicit `-f json`.
+  - **Explicit `--output` with `--json` / `-f azure` is Rejected**: Supplying `--output` (including empty values like `--output=""`) when running in `--json` or `-f azure` mode is invalid usage (exit `2`). `--output` is reserved strictly for console Markdown export, not a secondary file destination.
+
+### Deterministic Exit Codes
+
+TestGuard decouples analysis completeness from policy findings:
+
+| Exit Code | Meaning | Analysis Status | Policy Status | Description |
+|---|---|---|---|---|
+| `0` | **Passed** | `complete` | `no_blocker` | Nonempty analysis completed successfully; no blocker violations found (advisories/warnings may exist). |
+| `1` | **Blocker Found** | `complete` | `blocker_found` | Nonempty analysis completed successfully; at least one blocker violation detected. |
+| `2` | **Incomplete / Error** | `incomplete` or `error` | `no_blocker` or `blocker_found` | Incomplete analysis or usage error: `--diff` rejected, unreadable/missing paths, traversal/parse errors, unsupported file extension targets, or empty test scope without `--allow-empty`. Retained findings survive. |
+| `3` | **Not Applicable** | `not_applicable` | `no_blocker` | Empty test scope explicitly authorized via `--allow-empty` with zero findings. **Exit 3 is not passed**; it signifies the check was inapplicable. |
+
+### Machine-Readable JSON Output (`schema_version: 1`)
+
+When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope (`ScanReport`) to `stdout`:
+
+```json
+{
+  "schema_version": 1,
+  "tool": {
+    "name": "testguard",
+    "version": "0.2.0",
+    "commit": null,
+    "built_at": null
+  },
+  "scope": {
+    "requested_paths": ["."],
+    "effective_mode": "full",
+    "files": ["sample_test.go"],
+    "excluded": [],
+    "unsupported": [],
+    "config_applied": false
+  },
+  "analysis": {
+    "status": "complete",
+    "reason": "analyzed",
+    "discovered_files": 1,
+    "analyzed_files": 1,
+    "analyzed_tests": 1,
+    "failed_files": 0
+  },
+  "findings": [],
+  "diagnostics": [],
+  "policy": {
+    "blocker_count": 0,
+    "status": "no_blocker"
+  },
+  "exit_code": 0
+}
+```
+
+**Important for Consumers & Dashboards**:
+1. Verify `"schema_version": 1`.
+2. Cross-check the envelope's `"exit_code"` against the process exit code to ensure consistency.
+3. Check `"analysis"."status"`: only when status is `"complete"` with exit code `0` can an empty findings array (`"findings": []`) be interpreted as clean test assurance.
+4. **Retained Diagnostic Findings**: When analysis is `"incomplete"` or `"error"`, any findings collected prior to the failure survive in `.findings` and provide valuable diagnostic insight alongside `.diagnostics`. However, do not treat an incomplete scan as passing simply because blocker findings are absent.
+### Heuristic Boundaries & Adoption Policy
+
+- **Static Heuristics Only**: TestGuard inspects static AST token structures and syntactic patterns. It does not execute tests, invoke dynamic mutation testing harnesses, or verify runtime behavioral correctness.
+- **No Production Assurance Claims**: TestGuard provides local-untrusted linting and anti-pattern detection; it does not certify production reliability or complete fault coverage.
+- **Observation-First Adoption**: Teams should deploy TestGuard in CI under observation-only (non-blocking) mode. Activating blocking gates requires human owner review and calibrated baseline results. Rollback ownership is explicit: disable the blocking gate while retaining reporting artifacts; never convert missing evidence into success.
+- **Unreleased Contract Boundary**: The 0.2.0 envelope and exit code semantics represent an unreleased specification boundary.
 
 ---
 
