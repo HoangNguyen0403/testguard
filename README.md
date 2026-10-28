@@ -54,7 +54,7 @@ testguard explain GUARD-DART-SEED-ECHO
 - **`--all` (`-a`)**: Force full scan across all candidate test files.
 - **`--allow-empty`**: Permits scanning targets with zero analyzable test declarations. Without this flag, discovering zero test declarations is considered an incomplete scan (exit `2`, `empty_scope`). With `--allow-empty`, an empty scan with no findings produces exit `3` (`not_applicable / empty_allowed`).
 - **`--diff` (`-d`) Unsupported**: The `--diff` flag is not implemented and is explicitly rejected with exit `2` (`invalid_usage`). Scans operate in full target mode.
-- **Configuration (`testguard.yaml`)**: Checked-in `testguard.yaml` files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
+- **Limiting Scope**: Pass explicit paths, e.g. `testguard path/to/module`. Linked git worktrees and `vendor/` / `third_party/` directories are skipped automatically. Repository configuration files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
 - **Flag Compatibility Restrictions**:
   - **`--json` with `-f azure` is Rejected**: Combining `--json` with `-f azure` is invalid usage (exit `2`, `invalid_usage`). `--json` is compatible only with default console mode or explicit `-f json`.
   - **Explicit `--output` with `--json` / `-f azure` is Rejected**: Supplying `--output` (including empty values like `--output=""`) when running in `--json` or `-f azure` mode is invalid usage (exit `2`). `--output` is reserved strictly for console Markdown export, not a secondary file destination.

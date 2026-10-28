@@ -339,66 +339,9 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 		},
 	}
 
-	// Subcommand: init (Generate starter testguard.yaml)
-	initCmd := &cobra.Command{
-		Use:     "init",
-		Short:   "Generate a starter testguard.yaml configuration file",
-		Example: `  testguard init`,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			target := "testguard.yaml"
-			if _, err := os.Stat(target); err == nil {
-				fmt.Println("ℹ️ testguard.yaml already exists in this directory.")
-				return nil
-			}
-
-			starterConfig := `# 🛡️ TestGuard Configuration File
-# Documentation: https://github.com/HoangNguyen0403/testguard#readme
-
-version: "1.0"
-
-# Global CI / Execution Defaults
-global:
-  fail_on: blocker              # Exit 1 only on "blocker". Options: blocker, warning, none
-  diff_base: origin/develop     # Default base branch for PR diffs
-  exclude:
-    - "**/*.g.dart"
-    - "**/*.freezed.dart"
-    - "**/mock_*.go"
-    - "node_modules/**"
-    - "vendor/**"
-
-# In-Code Suppression Syntax
-# e.g.: // testguard:ignore GUARD-DART-SEED-ECHO reason: legacy test refactoring deferred
-suppression:
-  enabled: true
-  require_reason: true
-
-# Language-Specific Rule Overrides
-languages:
-  dart:
-    enabled: true
-    test_globs: ["test/**/*_test.dart"]
-  golang:
-    enabled: true
-    test_globs: ["**/*_test.go"]
-  typescript:
-    enabled: true
-    test_globs: ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts"]
-`
-			if err := os.WriteFile(target, []byte(starterConfig), 0644); err != nil {
-				return fmt.Errorf("failed to write testguard.yaml: %w", err)
-			}
-
-			fmt.Println("✅ Generated starter testguard.yaml configuration file.")
-			return nil
-		},
-	}
-
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(rulesCmd)
 	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(initCmd)
-
 	if err := rootCmd.Execute(); err != nil {
 		if jsonRequested, paths := classifyScanInvocation(rootCmd, os.Args[1:]); jsonRequested {
 			emitCLIError(true, err.Error(), paths, version, commit, date)
