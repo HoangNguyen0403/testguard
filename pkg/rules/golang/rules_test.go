@@ -102,238 +102,20 @@ func TestDomainPurityRule_AliasedImportDetected(t *testing.T) {
 	}
 }
 
-func TestPortMockingRule(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	t.Run("service test using sqlmock triggers GUARD-GO-02", func(t *testing.T) {
-		unitWithConcreteMock := parser.TestUnit{
-			Name:      "TestOrderService",
-			FilePath:  "internal/service/order_test.go",
-			StartLine: 20,
-			RawBody:   "db, mock, err := sqlmock.New();",
-		}
-
-		violations := checker.Evaluate(unitWithConcreteMock)
-		if len(violations) != 1 {
-			t.Fatalf("expected 1 port mocking violation, got %d", len(violations))
-		}
-		if violations[0].RuleID != "GUARD-GO-02" {
-			t.Errorf("expected GUARD-GO-02, got %s", violations[0].RuleID)
-		}
-		if violations[0].Severity != models.SeverityWarning {
-			t.Errorf("expected Warning severity, got %s", violations[0].Severity)
-		}
-	})
-
-	t.Run("repository and infrastructure tests using sqlmock are exempted", func(t *testing.T) {
-		testCases := []struct {
-			name     string
-			filePath string
-			rawBody  string
-		}{
-			{
-				name:     "repository file path prefix",
-				filePath: "repository/cart_item_repository_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "nested repository directory",
-				filePath: "internal/repository/user_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "repository test file suffix",
-				filePath: "cart_item_repository_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "infrastructure layer",
-				filePath: "internal/infrastructure/database/pgx_test.go",
-				rawBody:  "mock, err := pgxmock.NewPool();",
-			},
-			{
-				name:     "database directory",
-				filePath: "database/migration_test.go",
-				rawBody:  "db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})",
-			},
-			{
-				name:     "db directory",
-				filePath: "internal/db/client_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "dao directory root-relative",
-				filePath: "dao/order_dao_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "dao directory nested",
-				filePath: "internal/dao/item_dao_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "store directory root-relative",
-				filePath: "store/cache_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-			{
-				name:     "store directory nested",
-				filePath: "pkg/store/cache_test.go",
-				rawBody:  "db, mock, err := sqlmock.New();",
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				unit := parser.TestUnit{
-					Name:      "TestDatabaseAdapter",
-					FilePath:  tc.filePath,
-					StartLine: 10,
-					RawBody:   tc.rawBody,
-				}
-
-				violations := checker.Evaluate(unit)
-				if len(violations) != 0 {
-					t.Errorf("expected 0 violations for %s, got %d", tc.filePath, len(violations))
-				}
-			})
-		}
-	})
-
-	t.Run("service files merely containing repository or database in basename are NOT exempted", func(t *testing.T) {
-		serviceCases := []string{
-			"service/repository_client_test.go",
-			"service/database_sync_test.go",
-			"internal/handler/repository_handler_test.go",
-		}
-
-		for _, path := range serviceCases {
-			unit := parser.TestUnit{
-				Name:      "TestServiceDirectDb",
-				FilePath:  path,
-				StartLine: 15,
-				RawBody:   "db, mock, err := sqlmock.New();",
-			}
-
-			violations := checker.Evaluate(unit)
-			if len(violations) != 1 {
-				t.Errorf("expected 1 violation for non-infra file %s calling sqlmock.New(), got %d", path, len(violations))
-			}
-		}
-	})
-}
-
-func TestPortMockingRule_QuotedSourceInStringOrCommentIgnored(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	unit := parser.TestUnit{
-		Name:      "TestServiceCodeGenerator",
-		FilePath:  "internal/service/codegen_test.go",
-		StartLine: 15,
-		RawBody: `
-		const fixture = "db, mock, err := sqlmock.New();"
-		// Comment mentioning gorm.Open(postgres.Open(dsn), &gorm.Config{})
-		msg := "pgxmock.NewPool() should not trigger in string literal"
-		_ = msg
-		`,
-	}
-
-	violations := checker.Evaluate(unit)
-	if len(violations) != 0 {
-		t.Errorf("expected 0 violations for quoted sqlmock in service test, got %d", len(violations))
-	}
-}
-
-func TestPortMockingRule_ExecutableCallDetectedWithExactLine(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	unit := parser.TestUnit{
-		Name:      "TestOrderServiceDirectDbMock",
-		FilePath:  "internal/service/order_test.go",
-		StartLine: 30,
-		RawBody: `func TestOrderServiceDirectDbMock(t *testing.T) {
-	service := "order"
-	_ = service
-	db, mock, err := sqlmock.New()
-	_ = db
-	_ = mock
-	_ = err
-}`,
-	}
-
-	violations := checker.Evaluate(unit)
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 port mocking violation, got %d", len(violations))
-	}
-	expectedLine := 33
-	if violations[0].LineNumber != expectedLine {
-		t.Errorf("expected violation at line %d, got %d", expectedLine, violations[0].LineNumber)
-	}
-}
-
-func TestPortMockingRule_AliasedImportDetected(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	unit := parser.TestUnit{
-		Name:      "TestServiceAliasedSqlmock",
-		FilePath:  "internal/service/order_test.go",
-		StartLine: 25,
-		RawBody: `func TestServiceAliasedSqlmock(t *testing.T) {
-	db, mock, err := dbmock.New()
-	_ = db
-	_ = mock
-	_ = err
-}`,
-		FileImports: map[string]string{
-			"dbmock": "github.com/DATA-DOG/go-sqlmock",
-		},
-	}
-
-	violations := checker.Evaluate(unit)
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 violation for aliased sqlmock import, got %d", len(violations))
-	}
-	if violations[0].RuleID != "GUARD-GO-02" {
-		t.Errorf("expected GUARD-GO-02, got %s", violations[0].RuleID)
-	}
-}
-
-func TestPortMockingRule_UnrelatedLocalReceiverIgnored(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	// When FileImports is present and does NOT include sqlmock,
-	// an unrelated local variable named sqlmock calling New() must NOT be flagged (R7)
-	unit := parser.TestUnit{
-		Name:      "TestServiceLocalReceiver",
-		FilePath:  "internal/service/order_test.go",
-		StartLine: 25,
-		RawBody: `func TestServiceLocalReceiver(t *testing.T) {
-	var sqlmock Helper
-	res := sqlmock.New()
-	_ = res
-}`,
-		FileImports: map[string]string{
-			"myutil": "company.com/myutil",
-		},
-	}
-
-	violations := checker.Evaluate(unit)
-	if len(violations) != 0 {
-		t.Errorf("expected 0 violations for unrelated local receiver named sqlmock, got %d", len(violations))
-	}
-}
-
 func TestTableDuplicateRule(t *testing.T) {
 	unitWithDuplicateRows := parser.TestUnit{
 		Name:      "TestCalculateTax",
 		FilePath:  "service/tax_test.go",
 		StartLine: 15,
-		RawBody: `
+		RawBody: `func TestCalculateTax(t *testing.T) {
 		tests := []struct{ in int; want int }{
 			{in: 100, want: 10},
 			{in: 100, want: 10}, // duplicate row!
 		}
-		`,
+		for _, tc := range tests {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	checker := golang.NewTableDuplicateRule()
@@ -418,7 +200,9 @@ func TestTableDuplicateRule_ShortDuplicateRowsDetected(t *testing.T) {
 		{0},
 		{0},
 	}
-	_ = tests
+	for _, tc := range tests {
+		t.Run("sub", func(t *testing.T) { _ = tc })
+	}
 }`,
 	}
 
@@ -439,7 +223,7 @@ func TestTableDuplicateRule_DistinctBoundaryValuesPreserved(t *testing.T) {
 		Name:      "TestBoundaryValues",
 		FilePath:  "service/calc_test.go",
 		StartLine: 1,
-		RawBody: `
+		RawBody: `func TestBoundaryValues(t *testing.T) {
 		tests := []struct{ in int; want int }{
 			{in: 0, want: 0},
 			{in: -1, want: 0},
@@ -447,7 +231,10 @@ func TestTableDuplicateRule_DistinctBoundaryValuesPreserved(t *testing.T) {
 			{in: 100, want: 10},
 			{in: 999999, want: 99999},
 		}
-		`,
+		for _, tc := range tests {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	violations := checker.Evaluate(unit)
@@ -468,7 +255,9 @@ func TestTableDuplicateRule_ExecutableDuplicateRowDetectedWithExactLine(t *testi
 		{in: 100, want: 10},
 		{in: 100, want: 10},
 	}
-	_ = tests
+	for _, tc := range tests {
+		t.Run("sub", func(t *testing.T) { _ = tc })
+	}
 }`,
 	}
 
@@ -522,10 +311,12 @@ func TestTableDuplicateRule_NamedRowTypeAmbiguityAccepted(t *testing.T) {
 		Name:      "TestNamedRows",
 		FilePath:  "service/named_test.go",
 		StartLine: 12,
-		RawBody: `
+		RawBody: `func TestNamedRows(t *testing.T) {
 		rows := []caseRow{{0}, {0}}
-		_ = rows
-		`,
+		for _, tc := range rows {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	violations := checker.Evaluate(unit)
@@ -534,64 +325,89 @@ func TestTableDuplicateRule_NamedRowTypeAmbiguityAccepted(t *testing.T) {
 	}
 }
 
-func TestPortMockingRule_UnaliasedImportNameResolved(t *testing.T) {
-	checker := golang.NewPortMockingRule()
+func TestTableDuplicateRule_Addendum2(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
 
-	// The adapter maps the unaliased go-sqlmock import to its declared package
-	// name, not filepath.Base(path).
-	unit := parser.TestUnit{
-		Name:      "TestUnaliasedSQLMock",
-		FilePath:  "internal/service/order_test.go",
-		StartLine: 20,
-		RawBody:   "db, mock, err := sqlmock.New();",
-		FileImports: map[string]string{
-			"sqlmock": "github.com/DATA-DOG/go-sqlmock",
-		},
-	}
+	t.Run("dedup-input fixture slice -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestDedupInputs",
+			FilePath:  "service/dedup_test.go",
+			StartLine: 10,
+			RawBody: `func TestDedupInputs(t *testing.T) {
+				inputs := []struct{ ID int }{{ID: 1}, {ID: 1}}
+				_ = inputs
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for dedup-input fixture slice, got %d: %+v", len(v), v)
+		}
+	})
 
-	violations := checker.Evaluate(unit)
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 violation for unaliased sqlmock import, got %d", len(violations))
-	}
-	if violations[0].RuleID != "GUARD-GO-02" {
-		t.Errorf("expected GUARD-GO-02, got %s", violations[0].RuleID)
-	}
-}
+	t.Run("mock Return slice with duplicate elements -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestMockReturnSlice",
+			FilePath:  "service/repo_test.go",
+			StartLine: 10,
+			RawBody: `func TestMockReturnSlice(t *testing.T) {
+				mock.EXPECT().Find().Return([]struct{ Code string }{{Code: "A"}, {Code: "A"}})
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for mock Return slice, got %d: %+v", len(v), v)
+		}
+	})
 
-func TestPortMockingRule_RealPackageCallSurvivesLaterShadow(t *testing.T) {
-	checker := golang.NewPortMockingRule()
+	t.Run("ranged t.Run table with two rows identical except name -> 1", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestRangedTableDuplicate",
+			FilePath:  "service/calc_test.go",
+			StartLine: 10,
+			RawBody: `func TestRangedTableDuplicate(t *testing.T) {
+				tests := []struct {
+					name string
+					in   int
+					want int
+				}{
+					{name: "first case", in: 10, want: 20},
+					{name: "second case", in: 10, want: 20},
+				}
+				for _, tc := range tests {
+					t.Run(tc.name, func(t *testing.T) {
+						if tc.in * 2 != tc.want { t.Fatal("fail") }
+					})
+				}
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 1 {
+			t.Fatalf("expected 1 violation for identical rows except name, got %d: %+v", len(v), v)
+		}
+	})
 
-	unit := parser.TestUnit{
-		Name:      "TestPackageCallBeforeShadow",
-		FilePath:  "internal/service/order_test.go",
-		StartLine: 20,
-		RawBody: `func TestPackageCallBeforeShadow(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	_ = db
-	_ = mock
-	_ = err
-	{
-		sqlmock := newFakeScope()
-		res := sqlmock.New()
-		_ = res
-	}
-	t.Fatal("control")
-}`,
-		FileImports: map[string]string{
-			"sqlmock": "github.com/DATA-DOG/go-sqlmock",
-		},
-	}
-
-	violations := checker.Evaluate(unit)
-	if len(violations) != 1 {
-		t.Fatalf("expected only the genuine package call to be reported, got %d (%+v)", len(violations), violations)
-	}
-	if violations[0].RuleID != "GUARD-GO-02" {
-		t.Errorf("expected GUARD-GO-02, got %s", violations[0].RuleID)
-	}
-	if violations[0].LineNumber != 21 {
-		t.Errorf("expected genuine package call at line 21, got %d", violations[0].LineNumber)
-	}
+	t.Run("ranged table with rows differing in want -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestRangedTableDistinct",
+			FilePath:  "service/calc_test.go",
+			StartLine: 10,
+			RawBody: `func TestRangedTableDistinct(t *testing.T) {
+				tests := []struct {
+					name string
+					in   int
+					want int
+				}{
+					{name: "first case", in: 10, want: 20},
+					{name: "second case", in: 10, want: 30},
+				}
+				for _, tc := range tests {
+					t.Run(tc.name, func(t *testing.T) {
+						if tc.in * 2 != tc.want { t.Fatal("fail") }
+					})
+				}
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for rows differing in want, got %d: %+v", len(v), v)
+		}
+	})
 }
 
 func TestDomainPurityRule_RealPackageCallSurvivesLaterShadow(t *testing.T) {
@@ -628,28 +444,6 @@ func TestDomainPurityRule_RealPackageCallSurvivesLaterShadow(t *testing.T) {
 	}
 }
 
-func TestPortMockingRule_ImportedPackageShadowedLocallyIgnored(t *testing.T) {
-	checker := golang.NewPortMockingRule()
-
-	unit := parser.TestUnit{
-		Name:      "TestShadowedImport",
-		FilePath:  "internal/service/shadow_test.go",
-		StartLine: 25,
-		RawBody: `func TestShadowedImport(t *testing.T) {
-	sqlmock := newFakeScope()
-	res := sqlmock.New()
-	_ = res
-}`,
-		FileImports: map[string]string{
-			"sqlmock": "github.com/DATA-DOG/go-sqlmock",
-		},
-	}
-
-	if violations := checker.Evaluate(unit); len(violations) != 0 {
-		t.Errorf("expected 0 violations when the imported identifier is shadowed locally, got %d", len(violations))
-	}
-}
-
 func TestDomainPurityRule_ImportedPackageShadowedLocallyIgnored(t *testing.T) {
 	checker := golang.NewDomainPurityRule()
 
@@ -669,5 +463,173 @@ func TestDomainPurityRule_ImportedPackageShadowedLocallyIgnored(t *testing.T) {
 
 	if violations := checker.Evaluate(unit); len(violations) != 0 {
 		t.Errorf("expected 0 violations when the imported identifier is shadowed locally, got %d", len(violations))
+	}
+}
+func TestF10_NamedRowDistinctInputsNotDuplicate(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/inputs_test.go",
+		StartLine: 10,
+		RawBody: `func TestRows(t *testing.T) {
+		type row struct { input string; want int }
+		cases := []row{{"first", 1}, {"second", 1}}
+		for _, tc := range cases {
+			t.Run(tc.input, func(t *testing.T) {
+				if len(tc.input) != tc.want { t.Fatal(tc.input) }
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for distinct input rows, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestR3_PositionalStringAndBoolRowsNotDuplicate(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestEnvRows",
+		FilePath:  "service/env_test.go",
+		StartLine: 10,
+		RawBody: `func TestEnvRows(t *testing.T) {
+		type envRow struct { env string; active bool }
+		cases := []envRow{{"prd", true}, {"prod", true}}
+		for _, tc := range cases {
+			t.Run(tc.env, func(t *testing.T) {
+				if !tc.active { t.Fatal(tc.env) }
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for positional string and bool rows, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestR3_RangeBodyConditionsOnNameFieldSkipped(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestConditionsOnName",
+		FilePath:  "service/cond_test.go",
+		StartLine: 10,
+		RawBody: `func TestConditionsOnName(t *testing.T) {
+		cases := []struct { name string; want int }{
+			{"case 1", 1},
+			{"case 2", 1},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if tc.name == "case 1" {
+					// special logic
+				}
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations when condition branches on name field, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestF11_UnrelatedRunReceiverNotTableTest(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestData",
+		FilePath:  "service/data_test.go",
+		StartLine: 10,
+		RawBody: `func TestData(t *testing.T) {
+		type processor struct{}
+		var p processor
+		data := []struct{ n int }{{1}, {1}}
+		for _, d := range data {
+			p.Run(d.n)
+		}
+		if len(data) != 2 { t.Fatal(data) }
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for non-test Run method, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestF11_ShadowedTableNotRangedOver(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/shadow_test.go",
+		StartLine: 10,
+		RawBody: `func TestRows(t *testing.T) {
+		cases := []struct{ n int }{{1}, {1}}
+		_ = cases
+		{
+			cases := []int{2, 3}
+			for _, n := range cases {
+				t.Run("unique", func(t *testing.T) {
+					if n < 0 { t.Fatal(n) }
+				})
+			}
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for unused outer duplicate table, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestN5_GO03NestedTestingParam(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/nested_test.go",
+		StartLine: 1,
+		RawBody: `func TestRows(t *testing.T){
+		cases:=[]struct{name string;n int}{{"a",1},{"b",1}};
+		t.Run("parent",func(t *testing.T){
+			for _,tc:=range cases{
+				t.Run(tc.name,func(t *testing.T){
+					if tc.n!=1{t.Fatal(tc.n)}
+				})
+			}
+		})
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation for duplicate table row under nested t.Run param, got %d: %+v", len(violations), violations)
+	}
+	if violations[0].RuleID != "GUARD-GO-03" {
+		t.Errorf("expected RuleID GUARD-GO-03, got %s", violations[0].RuleID)
+	}
+}
+
+func TestEdgeE1_GO03TaglessSwitch(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/tagless_test.go",
+		StartLine: 1,
+		RawBody: `func TestRows(t *testing.T){
+		cases:=[]struct{name string;n int}{{"a",1},{"b",1}};
+		for _,tc:=range cases{
+			t.Run(tc.name,func(t *testing.T){
+				switch{
+				case tc.name=="a":
+					if tc.n!=1{t.Fatal(tc.n)};
+				default:
+					if tc.n!=2{t.Fatal(tc.n)}
+				}
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations when tagless switch references name field, got %d: %+v", len(violations), violations)
 	}
 }

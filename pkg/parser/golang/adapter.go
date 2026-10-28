@@ -71,6 +71,7 @@ func newKnownImportLocalNames() map[string]string {
 	names["github.com/stretchr/testify/assert"] = "assert"
 	names["github.com/stretchr/testify/require"] = "require"
 	names["github.com/matryer/is"] = "is"
+	names["github.com/stretchr/testify/suite"] = "suite"
 	return names
 }
 
@@ -170,6 +171,56 @@ func isPointerToTestingType(expr ast.Expr, ctx importContext, typeName string) b
 		return ctx.testingName != "" && ident.Name == ctx.testingName
 	case *ast.Ident:
 		return ctx.dotTesting && inner.Name == typeName
+	}
+	return false
+}
+
+// isTestingType checks if expr matches *<testingPkg>.<typeName> or <testingPkg>.<typeName>
+// for any typeName in typeNames.
+func isTestingType(expr ast.Expr, ctx importContext, typeNames ...string) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		switch inner := star.X.(type) {
+		case *ast.SelectorExpr:
+			ident, ok := inner.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			for _, typeName := range typeNames {
+				if inner.Sel.Name == typeName {
+					return ctx.testingName != "" && ident.Name == ctx.testingName
+				}
+			}
+		case *ast.Ident:
+			if ctx.dotTesting {
+				for _, typeName := range typeNames {
+					if inner.Name == typeName {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	switch inner := expr.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := inner.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		for _, typeName := range typeNames {
+			if inner.Sel.Name == typeName {
+				return ctx.testingName != "" && ident.Name == ctx.testingName
+			}
+		}
+	case *ast.Ident:
+		if ctx.dotTesting {
+			for _, typeName := range typeNames {
+				if inner.Name == typeName {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
@@ -295,36 +346,385 @@ func isAssertionImportPath(path string) bool {
 // their lexical declaration object (ast.Ident.Obj), so the same spelling in a
 // disjoint scope never inherits an assertion origin. Helper-mediated and
 // dynamically resolved assertion receivers are outside this static boundary.
-func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileImports map[string]string) []string {
+func isGomockConstructorCall(
+	call *ast.CallExpr,
+	gomockControllers map[*ast.Object]bool,
+	gomockCtrlFields map[string]bool,
+	recvParam *ast.Object,
+	imports importContext,
+	testingParamSet map[*ast.Object]bool,
+	declaredTopLevelFuncs map[string]*ast.FuncDecl,
+) bool {
+	isConstructor := false
+	if fnIdent, ok := call.Fun.(*ast.Ident); ok {
+		if strings.HasPrefix(fnIdent.Name, "NewMock") {
+			if fnIdent.Obj == nil && (declaredTopLevelFuncs == nil || declaredTopLevelFuncs[fnIdent.Name] == nil) {
+				isConstructor = true
+			}
+		}
+	} else if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+		if strings.HasPrefix(sel.Sel.Name, "NewMock") {
+			if pkgIdent, ok := sel.X.(*ast.Ident); ok && pkgIdent.Obj == nil {
+				isConstructor = true
+			}
+		}
+	}
+	if !isConstructor {
+		return false
+	}
+	for _, arg := range call.Args {
+		if argIdent, ok := arg.(*ast.Ident); ok && gomockControllers[argIdent.Obj] {
+			return true
+		}
+		if argSel, ok := arg.(*ast.SelectorExpr); ok {
+			if ident, ok := argSel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+				if gomockCtrlFields[argSel.Sel.Name] {
+					return true
+				}
+			}
+		}
+		if argCall, ok := arg.(*ast.CallExpr); ok {
+			if isGomockNewControllerCall(argCall, imports, testingParamSet, recvParam) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func getObjectFieldPath(expr ast.Expr) (*ast.Object, string) {
+	expr = unwrapParen(expr)
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return nil, ""
+	}
+	path := sel.Sel.Name
+	curr := sel.X
+	for {
+		curr = unwrapParen(curr)
+		if s, ok := curr.(*ast.SelectorExpr); ok {
+			path = s.Sel.Name + "." + path
+			curr = s.X
+			continue
+		}
+		if ident, ok := curr.(*ast.Ident); ok && ident.Obj != nil {
+			return ident.Obj, path
+		}
+		return nil, ""
+	}
+}
+
+func getReceiverTypeName(expr ast.Expr) string {
+	expr = unwrapParen(expr)
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = unwrapParen(star.X)
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
+func resolveExprTypeName(expr ast.Expr, localExprTypes map[*ast.Object]string) string {
+	expr = unwrapParen(expr)
+	if cl, ok := expr.(*ast.CompositeLit); ok && cl.Type != nil {
+		return getReceiverTypeName(cl.Type)
+	}
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		return resolveExprTypeName(unary.X, localExprTypes)
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		if ident.Obj != nil {
+			if typeName, exists := localExprTypes[ident.Obj]; exists && typeName != "" {
+				return typeName
+			}
+			if vs, ok := ident.Obj.Decl.(*ast.ValueSpec); ok {
+				if vs.Type != nil {
+					return getReceiverTypeName(vs.Type)
+				}
+				if len(vs.Values) > 0 {
+					return resolveExprTypeName(vs.Values[0], localExprTypes)
+				}
+			}
+			if as, ok := ident.Obj.Decl.(*ast.AssignStmt); ok {
+				for i, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && id.Obj == ident.Obj && i < len(as.Rhs) {
+						return resolveExprTypeName(as.Rhs[i], localExprTypes)
+					}
+				}
+			}
+			if ident.Obj.Kind == ast.Typ {
+				return ident.Name
+			}
+		}
+		return ident.Name
+	}
+	if call, ok := expr.(*ast.CallExpr); ok {
+		if id, ok := call.Fun.(*ast.Ident); ok && id.Obj != nil {
+			if fd, ok := id.Obj.Decl.(*ast.FuncDecl); ok && fd.Type != nil && fd.Type.Results != nil && len(fd.Type.Results.List) > 0 {
+				return getReceiverTypeName(fd.Type.Results.List[0].Type)
+			}
+		}
+	}
+	return ""
+}
+
+func getSuiteReceiverField(expr ast.Expr, recvParam *ast.Object) string {
+	if sel, ok := expr.(*ast.SelectorExpr); ok {
+		if ident, ok := sel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+			return sel.Sel.Name
+		}
+	}
+	return ""
+}
+
+func isSuiteT(call *ast.CallExpr, recvParam *ast.Object) bool {
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "T" {
+		if ident, ok := sel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExecutableAssertionsInFuncLit(fnLit *ast.FuncLit, imports importContext, assertingHelpers map[*ast.Object]string, declaredTopLevelFuncs map[string]*ast.FuncDecl) bool {
+	if fnLit.Body == nil {
+		return false
+	}
+	var testingParams []*ast.Object
+	if fnLit.Type != nil && fnLit.Type.Params != nil {
+		for _, f := range fnLit.Type.Params.List {
+			for _, name := range f.Names {
+				if name.Obj != nil {
+					testingParams = append(testingParams, name.Obj)
+				}
+			}
+		}
+	}
+	fakeDecl := &ast.FuncDecl{
+		Name: &ast.Ident{Name: "_anon"},
+		Type: fnLit.Type,
+		Body: fnLit.Body,
+	}
+	assertions := findExecutableAssertions(
+		fakeDecl,
+		testingParams,
+		nil,
+		"",
+		imports,
+		assertingHelpers,
+		declaredTopLevelFuncs,
+		nil,
+		nil,
+		nil,
+	)
+	return len(assertions) > 0
+}
+
+func findExecutableAssertions(
+	fn *ast.FuncDecl,
+	testingParams []*ast.Object,
+	recvParam *ast.Object,
+	recvTypeName string,
+	imports importContext,
+	assertingHelpers map[*ast.Object]string,
+	declaredTopLevelFuncs map[string]*ast.FuncDecl,
+	suiteReceiverHelpers map[string]map[string]bool,
+	suiteGomockFields map[string]bool,
+	sameFileExpectTypes map[string]bool,
+) []string {
 	if fn.Body == nil {
 		return nil
 	}
 
-	// First pass: receivers established by an assertion constructor.
+	testingParamSet := make(map[*ast.Object]bool)
+	for _, p := range testingParams {
+		if p != nil {
+			testingParamSet[p] = true
+		}
+	}
+
 	assertionReceivers := make(map[*ast.Object]bool)
+	gomockControllers := make(map[*ast.Object]bool)
+	gomockCtrlFields := make(map[string]bool)
+	gomockMocks := make(map[*ast.Object]bool)
+	mockObjectFields := make(map[*ast.Object]map[string]bool)
+	addMockField := func(obj *ast.Object, path string) {
+		if obj == nil || path == "" {
+			return
+		}
+		if mockObjectFields[obj] == nil {
+			mockObjectFields[obj] = make(map[string]bool)
+		}
+		mockObjectFields[obj][path] = true
+	}
+	localExprTypes := make(map[*ast.Object]string)
+	calledMockFields := make(map[string]bool)
+
+	// First sweep: testing params, controllers, mock constructors, call invocations
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
+		switch node := n.(type) {
+		case *ast.FuncLit:
+			if node.Type != nil && node.Type.Params != nil {
+				for _, field := range node.Type.Params.List {
+					if isTestingType(field.Type, imports, "T", "TB") {
+						for _, name := range field.Names {
+							if name.Obj != nil {
+								testingParamSet[name.Obj] = true
+							}
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range node.Lhs {
+				if lhsIdent, ok := lhs.(*ast.Ident); ok && lhsIdent.Obj != nil && i < len(node.Rhs) {
+					if tn := resolveExprTypeName(node.Rhs[i], localExprTypes); tn != "" {
+						localExprTypes[lhsIdent.Obj] = tn
+					}
+				}
+			}
+			if len(node.Lhs) != 1 || len(node.Rhs) != 1 {
+				return true
+			}
+			call, ok := node.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			// Check NewController(t)
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if sel.Sel.Name == "NewController" {
+					if pkgIdent, ok := sel.X.(*ast.Ident); ok && pkgIdent.Obj == nil {
+						if isGomockImportPath(imports.localNames[pkgIdent.Name]) {
+							if len(call.Args) >= 1 {
+								if argIdent, ok := call.Args[0].(*ast.Ident); ok {
+									if testingParamSet[argIdent.Obj] || (recvParam != nil && argIdent.Obj == recvParam) {
+										if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+											gomockControllers[lhs.Obj] = true
+										} else if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+											if ident, ok := lhsSel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+												gomockCtrlFields[lhsSel.Sel.Name] = true
+											}
+										}
+									}
+								} else if argCall, ok := call.Args[0].(*ast.CallExpr); ok {
+									if argSel, ok := argCall.Fun.(*ast.SelectorExpr); ok && argSel.Sel.Name == "T" {
+										if argIdent, ok := argSel.X.(*ast.Ident); ok && recvParam != nil && argIdent.Obj == recvParam {
+											if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+												gomockControllers[lhs.Obj] = true
+											} else if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+												if ident, ok := lhsSel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+													gomockCtrlFields[lhsSel.Sel.Name] = true
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				} else if sel.Sel.Name == "New" {
+					pkgIdent, ok := sel.X.(*ast.Ident)
+					if ok && pkgIdent.Obj == nil && isAssertionImportPath(imports.localNames[pkgIdent.Name]) {
+						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+							assertionReceivers[lhs.Obj] = true
+						}
+					}
+				} else if recvParam != nil && (sel.Sel.Name == "Require" || sel.Sel.Name == "Assert") {
+					ident, ok := sel.X.(*ast.Ident)
+					if ok && ident.Obj == recvParam {
+						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+							assertionReceivers[lhs.Obj] = true
+						}
+					}
+				} else if recvParam != nil && sel.Sel.Name == "T" {
+					ident, ok := sel.X.(*ast.Ident)
+					if ok && ident.Obj == recvParam {
+						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+							testingParamSet[lhs.Obj] = true
+						}
+					}
+				}
+			}
+
+			// Check mock creation: NewMock<Anything>(ctrl)
+			if isGomockConstructorCall(call, gomockControllers, gomockCtrlFields, recvParam, imports, testingParamSet, declaredTopLevelFuncs) {
+				if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+					gomockMocks[lhs.Obj] = true
+				} else if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+					if obj, path := getObjectFieldPath(lhsSel); obj != nil && path != "" {
+						addMockField(obj, path)
+					}
+				}
+			} else if fnIdent, ok := call.Fun.(*ast.Ident); ok {
+				if recvParam == nil && fnIdent.Obj == nil && declaredTopLevelFuncs != nil && declaredTopLevelFuncs[fnIdent.Name] == nil {
+					// G4: Cross-file mock factory passing testing param
+					for _, arg := range call.Args {
+						if argIdent, ok := arg.(*ast.Ident); ok && testingParamSet[argIdent.Obj] {
+							if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+								gomockMocks[lhs.Obj] = true
+							}
+							break
+						}
+					}
+				}
+			}
+		case *ast.CallExpr:
+			// Check calls passing a known mock: tc.mock(mockRepo) or DoMock(m)
+			for _, arg := range node.Args {
+				if argIdent, ok := arg.(*ast.Ident); ok && gomockMocks[argIdent.Obj] {
+					if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+						calledMockFields[sel.Sel.Name] = true
+					} else if ident, ok := node.Fun.(*ast.Ident); ok {
+						calledMockFields[ident.Name] = true
+					}
+				}
+			}
 		}
-		lhs, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok || lhs.Obj == nil {
-			return true
-		}
-		ctor, ok := assign.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := ctor.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "New" {
-			return true
-		}
-		pkgIdent, ok := sel.X.(*ast.Ident)
-		if !ok || pkgIdent.Obj != nil {
-			return true
-		}
-		if isAssertionImportPath(fileImports[pkgIdent.Name]) {
-			assertionReceivers[lhs.Obj] = true
+		return true
+	})
+
+	// Second sweep: propagate mock provenance to closures/fields and aliases
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.KeyValueExpr:
+			if kIdent, ok := node.Key.(*ast.Ident); ok {
+				if calledMockFields[kIdent.Name] {
+					if fnLit, ok := node.Value.(*ast.FuncLit); ok {
+						if fnLit.Type != nil && fnLit.Type.Params != nil {
+							for _, field := range fnLit.Type.Params.List {
+								for _, name := range field.Names {
+									if name.Obj != nil {
+										gomockMocks[name.Obj] = true
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if len(node.Lhs) == 1 && len(node.Rhs) == 1 {
+				if rhsIdent, ok := node.Rhs[0].(*ast.Ident); ok && gomockMocks[rhsIdent.Obj] {
+					if lhsIdent, ok := node.Lhs[0].(*ast.Ident); ok && lhsIdent.Obj != nil {
+						gomockMocks[lhsIdent.Obj] = true
+					} else if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+						if obj, path := getObjectFieldPath(lhsSel); obj != nil && path != "" {
+							addMockField(obj, path)
+						}
+					}
+				}
+			}
+		case *ast.CallExpr:
+			for _, arg := range node.Args {
+				if argIdent, ok := arg.(*ast.Ident); ok && gomockMocks[argIdent.Obj] {
+					if sel, ok := node.Fun.(*ast.SelectorExpr); ok {
+						calledMockFields[sel.Sel.Name] = true
+					} else if ident, ok := node.Fun.(*ast.Ident); ok {
+						calledMockFields[ident.Name] = true
+					}
+				}
+			}
 		}
 		return true
 	})
@@ -338,24 +738,140 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		}
 	}
 
+	hasGomockController := false
+	hasChainedExpect := false
+
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
+
+		if isGomockNewControllerCall(call, imports, testingParamSet, recvParam) {
+			hasGomockController = true
+		}
+		if isChainedExpectCall(call, sameFileExpectTypes, localExprTypes) {
+			hasChainedExpect = true
+		}
+
+		// Helper calls: one-hop same-file helpers taking a testing parameter (resolved by ast.Ident.Obj)
+		if len(assertingHelpers) > 0 {
+			if ident, ok := call.Fun.(*ast.Ident); ok {
+				if ident.Obj != nil {
+					if helperName, exists := assertingHelpers[ident.Obj]; exists {
+						add("helper:" + helperName)
+						return true
+					}
+				}
+			}
+		}
+
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
+		methodName := sel.Sel.Name
+
+		// G5: Subtest delegation: t.Run("name", fnIdent) or s.Run("name", fnIdent)
+		if methodName == "Run" && len(call.Args) >= 2 {
+			isTestingRunner := false
+			if ident, ok := sel.X.(*ast.Ident); ok {
+				if testingParamSet[ident.Obj] || (recvParam != nil && ident.Obj == recvParam) {
+					isTestingRunner = true
+				}
+			} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if isSuiteT(innerCall, recvParam) {
+					isTestingRunner = true
+				}
+			}
+			if isTestingRunner {
+				if fnIdent, ok := call.Args[1].(*ast.Ident); ok {
+					if fnIdent.Obj != nil {
+						if fnIdent.Obj.Kind == ast.Fun {
+							if assertingHelpers[fnIdent.Obj] != "" {
+								add("helper:" + fnIdent.Name)
+							}
+						} else if fnIdent.Obj.Kind == ast.Var {
+							if assign, ok := fnIdent.Obj.Decl.(*ast.AssignStmt); ok {
+								for _, rhs := range assign.Rhs {
+									if fnLit, ok := rhs.(*ast.FuncLit); ok {
+										if hasExecutableAssertionsInFuncLit(fnLit, imports, assertingHelpers, declaredTopLevelFuncs) {
+											add("helper:" + fnIdent.Name)
+											break
+										}
+									}
+								}
+							}
+						}
+					} else if declaredTopLevelFuncs != nil && declaredTopLevelFuncs[fnIdent.Name] == nil {
+						// Cross-file helper / subtest func
+						add("helper:" + fnIdent.Name)
+					}
+				}
+			}
+		}
+
+		// G1: Suite receiver helpers: s.helper(...)
+		if recvParam != nil && suiteReceiverHelpers != nil && len(suiteReceiverHelpers[recvTypeName]) > 0 {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Obj == recvParam {
+				if suiteReceiverHelpers[recvTypeName][methodName] {
+					add("helper:" + methodName)
+					return true
+				}
+			}
+		}
+
+		// G3: Suite-lifecycle gomock: s.<field>.EXPECT()
+		if recvParam != nil && methodName == "EXPECT" {
+			fieldName := getSuiteReceiverField(sel.X, recvParam)
+			if fieldName != "" && (suiteGomockFields[fieldName] || (mockObjectFields[recvParam] != nil && mockObjectFields[recvParam][fieldName])) {
+				add("verify:gomock")
+				return true
+			}
+		}
+
+		// gomock: <x>.EXPECT() verified by mock provenance
+		if methodName == "EXPECT" {
+			root := getRootIdent(sel.X)
+			if root != nil && root.Obj != nil && gomockMocks[root.Obj] {
+				add("verify:gomock")
+				return true
+			}
+			if obj, path := getObjectFieldPath(sel.X); obj != nil && path != "" {
+				if mockObjectFields[obj] != nil && mockObjectFields[obj][path] {
+					add("verify:gomock")
+					return true
+				}
+			}
+		}
+		// G2: Provable suite assertion methods (s.X, s.Assert().X, s.Require().X, inside s.Run or subtest)
+		if recvParam != nil {
+			if isProvableSuiteAssertionCall(sel, recvParam, methodName) {
+				add(methodName)
+				return true
+			}
+			if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok {
+					if innerIdent, ok := innerSel.X.(*ast.Ident); ok && innerIdent.Obj == recvParam {
+						if innerSel.Sel.Name == "T" {
+							if strings.HasPrefix(methodName, "Error") || strings.HasPrefix(methodName, "Fatal") || strings.HasPrefix(methodName, "Fail") {
+								add(methodName)
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+
 		receiver, ok := sel.X.(*ast.Ident)
 		if !ok {
 			return true
 		}
-		methodName := sel.Sel.Name
 		receiverName := receiver.Name
 
-		// 1. Direct calls on the testing parameter (t.Fatal, test.Errorf, b.Fail).
-		if testingParam != nil && receiver.Obj == testingParam {
+		// 1. Direct calls on the testing parameter (t.Fatal, test.Errorf, b.Fail, inner t.Errorf).
+		if receiver.Obj != nil && testingParamSet[receiver.Obj] {
 			if strings.HasPrefix(methodName, "Error") || strings.HasPrefix(methodName, "Fatal") || strings.HasPrefix(methodName, "Fail") {
 				add(methodName)
 			}
@@ -363,10 +879,8 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		}
 
 		// 2. Calls on a known assertion package (assert.*, require.*, is.*).
-		// An identifier lexically bound in this file is not a package qualifier.
 		if receiver.Obj == nil {
-			if importPath, ok := fileImports[receiverName]; ok && isAssertionImportPath(importPath) {
-				// Constructors like assert.New(t) do NOT count as assertions.
+			if importPath, ok := imports.localNames[receiverName]; ok && isAssertionImportPath(importPath) {
 				if methodName != "New" {
 					add(receiverName + "." + methodName)
 				}
@@ -375,14 +889,416 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		}
 
 		// 3. Calls on a constructor-established assertion receiver.
-		if receiver.Obj != nil && assertionReceivers[receiver.Obj] && isCommonAssertionMethod(methodName) {
+		if receiver.Obj != nil && assertionReceivers[receiver.Obj] && (isCommonAssertionMethod(methodName) || testifySuiteAssertionMethods[methodName]) {
 			add(methodName)
+			return true
+		}
+
+		// 4. Calls on suite receiver: s.Equal(...)
+		if receiver.Obj != nil && recvParam != nil && receiver.Obj == recvParam && (isCommonAssertionMethod(methodName) || testifySuiteAssertionMethods[methodName]) {
+			add(methodName)
+			return true
 		}
 
 		return true
 	})
+	if hasGomockController && hasChainedExpect {
+		add("verify:gomock")
+	}
 
 	return assertions
+}
+
+func hasSuiteRunCall(body *ast.BlockStmt, ctx importContext) bool {
+	if body == nil {
+		return false
+	}
+	hasRun := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Run" {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Obj != nil {
+			return true
+		}
+		if ctx.localNames[pkgIdent.Name] == "github.com/stretchr/testify/suite" {
+			hasRun = true
+			return false
+		}
+		return true
+	})
+	return hasRun
+}
+
+func unwrapParen(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+func isGomockNewControllerCall(call *ast.CallExpr, imports importContext, testingParamSet map[*ast.Object]bool, recvParam *ast.Object) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "NewController" {
+		return false
+	}
+	pkgIdent, ok := unwrapParen(sel.X).(*ast.Ident)
+	if !ok || pkgIdent.Obj != nil || !isGomockImportPath(imports.localNames[pkgIdent.Name]) {
+		return false
+	}
+	if len(call.Args) < 1 {
+		return false
+	}
+	arg0 := unwrapParen(call.Args[0])
+	if argIdent, ok := arg0.(*ast.Ident); ok {
+		if (argIdent.Obj != nil && testingParamSet[argIdent.Obj]) || (recvParam != nil && argIdent.Obj == recvParam) {
+			return true
+		}
+	} else if argCall, ok := arg0.(*ast.CallExpr); ok {
+		if isSuiteT(argCall, recvParam) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChainedExpectCall(call *ast.CallExpr, sameFileExpectTypes map[string]bool, localExprTypes map[*ast.Object]string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	recv := unwrapParen(sel.X)
+	expectCall, ok := recv.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	expectSel, ok := expectCall.Fun.(*ast.SelectorExpr)
+	if !ok || expectSel.Sel.Name != "EXPECT" {
+		return false
+	}
+	if len(sameFileExpectTypes) > 0 {
+		recvOfExpect := unwrapParen(expectSel.X)
+		typeName := resolveExprTypeName(recvOfExpect, localExprTypes)
+		if typeName != "" && sameFileExpectTypes[typeName] {
+			return false
+		}
+	}
+	return true
+}
+
+func isPureDelegatingRunner(body *ast.BlockStmt, testParam *ast.Object) bool {
+	if body == nil || len(body.List) == 0 || testParam == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		exprStmt, ok := stmt.(*ast.ExprStmt)
+		if !ok {
+			return false
+		}
+		call, ok := exprStmt.X.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Run" {
+			return false
+		}
+		recvIdent, ok := unwrapParen(sel.X).(*ast.Ident)
+		if !ok || recvIdent.Obj != testParam {
+			return false
+		}
+		if len(call.Args) != 2 {
+			return false
+		}
+		arg0 := unwrapParen(call.Args[0])
+		lit, ok := arg0.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return false
+		}
+		arg1 := unwrapParen(call.Args[1])
+		if _, ok := arg1.(*ast.Ident); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+var testifySuiteAssertionMethods = map[string]bool{
+	"ElementsMatch": true, "Subset": true, "NotSubset": true,
+	"Greater": true, "GreaterOrEqual": true, "Less": true, "LessOrEqual": true,
+	"InDelta": true, "InEpsilon": true, "JSONEq": true, "YAMLEq": true,
+	"Regexp": true, "NotRegexp": true, "ErrorIs": true, "ErrorAs": true,
+	"ErrorContains": true, "EqualError": true, "EqualValues": true, "Exactly": true,
+	"Panics": true, "NotPanics": true, "Eventually": true, "Condition": true,
+	"Fail": true, "FailNow": true, "WithinDuration": true, "Positive": true,
+	"Negative": true, "Contains": true, "NotContains": true, "Len": true,
+	"Empty": true, "NotEmpty": true, "Nil": true, "NotNil": true,
+	"True": true, "False": true, "Equal": true, "NotEqual": true,
+	"NoError": true, "Error": true, "Zero": true, "NotZero": true,
+	"Same": true, "NotSame": true, "IsType": true, "Implements": true,
+}
+
+func isGomockImportPath(path string) bool {
+	return path == "github.com/golang/mock/gomock" || path == "go.uber.org/mock/gomock"
+}
+
+func getRootIdent(expr ast.Expr) *ast.Ident {
+	for {
+		switch e := expr.(type) {
+		case *ast.Ident:
+			return e
+		case *ast.SelectorExpr:
+			expr = e.X
+		case *ast.CallExpr:
+			expr = e.Fun
+		default:
+			return nil
+		}
+	}
+}
+
+func isProvableSuiteAssertionCall(sel *ast.SelectorExpr, recvParam *ast.Object, methodName string) bool {
+	if !isCommonAssertionMethod(methodName) && !testifySuiteAssertionMethods[methodName] {
+		return false
+	}
+	if ident, ok := sel.X.(*ast.Ident); ok && ident.Obj == recvParam {
+		return true
+	}
+	if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+		if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok {
+			if innerSel.Sel.Name == "Assert" || innerSel.Sel.Name == "Require" {
+				if innerIdent, ok := innerSel.X.(*ast.Ident); ok && innerIdent.Obj == recvParam {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func findEmbeddedSuiteStructs(fileAST *ast.File, ctx importContext) map[string]bool {
+	suiteStructs := make(map[string]bool)
+	for _, decl := range fileAST.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				if len(field.Names) == 0 {
+					ft := field.Type
+					if star, ok := ft.(*ast.StarExpr); ok {
+						ft = star.X
+					}
+					if sel, ok := ft.(*ast.SelectorExpr); ok {
+						if sel.Sel.Name == "Suite" {
+							if pkgIdent, ok := sel.X.(*ast.Ident); ok {
+								if ctx.localNames[pkgIdent.Name] == "github.com/stretchr/testify/suite" {
+									suiteStructs[ts.Name.Name] = true
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return suiteStructs
+}
+
+// FindEmbeddedSuiteStructs identifies struct types that anonymously embed suite.Suite or *suite.Suite
+// from "github.com/stretchr/testify/suite".
+func FindEmbeddedSuiteStructs(fileAST *ast.File) map[string]bool {
+	imports := resolveImports(fileAST)
+	return findEmbeddedSuiteStructs(fileAST, imports)
+}
+
+func classifySuiteReceiver(fn *ast.FuncDecl) (string, *ast.Object, bool) {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Name == nil || fn.Body == nil {
+		return "", nil, false
+	}
+	field := fn.Recv.List[0]
+	var recvTypeName string
+	switch t := field.Type.(type) {
+	case *ast.StarExpr:
+		if id, ok := t.X.(*ast.Ident); ok {
+			recvTypeName = id.Name
+		}
+	case *ast.Ident:
+		recvTypeName = t.Name
+	}
+	if recvTypeName == "" {
+		return "", nil, false
+	}
+
+	var recvParam *ast.Object
+	if len(field.Names) > 0 {
+		recvParam = field.Names[0].Obj
+	}
+
+	return recvTypeName, recvParam, true
+}
+
+func classifySuiteMethod(fn *ast.FuncDecl) (string, *ast.Object, bool) {
+	recvTypeName, recvParam, ok := classifySuiteReceiver(fn)
+	if !ok {
+		return "", nil, false
+	}
+	if fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 {
+		return "", nil, false
+	}
+	if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 {
+		return "", nil, false
+	}
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		return "", nil, false
+	}
+	if !isValidTestName(fn.Name.Name, "Test") {
+		return "", nil, false
+	}
+	return recvTypeName, recvParam, true
+}
+
+func collectAssertingHelpers(fileAST *ast.File, ctx importContext, declaredTopLevelFuncs map[string]*ast.FuncDecl) map[*ast.Object]string {
+	helpers := make(map[*ast.Object]string)
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Body == nil || fn.Name == nil {
+			continue
+		}
+		if _, isTest := classifyGoTestFunc(fn, ctx); isTest {
+			continue
+		}
+		if fn.Type.Params == nil {
+			continue
+		}
+		var testingParams []*ast.Object
+		for _, field := range fn.Type.Params.List {
+			if isTestingType(field.Type, ctx, "T", "TB") {
+				for _, nameIdent := range field.Names {
+					if nameIdent.Obj != nil {
+						testingParams = append(testingParams, nameIdent.Obj)
+					}
+				}
+			}
+		}
+		if len(testingParams) == 0 {
+			continue
+		}
+		assertions := findExecutableAssertions(fn, testingParams, nil, "", ctx, nil, declaredTopLevelFuncs, nil, nil, nil)
+		if len(assertions) > 0 {
+			if fn.Name.Obj != nil {
+				helpers[fn.Name.Obj] = fn.Name.Name
+			}
+		}
+	}
+	return helpers
+}
+
+func collectSuiteReceiverHelpers(
+	fileAST *ast.File,
+	ctx importContext,
+	provableSuiteReceivers map[string]bool,
+	assertingHelpers map[*ast.Object]string,
+	declaredTopLevelFuncs map[string]*ast.FuncDecl,
+	suiteGomockFields map[string]map[string]bool,
+	sameFileExpectTypes map[string]bool,
+) map[string]map[string]bool {
+	suiteHelpers := make(map[string]map[string]bool)
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Name == nil || fn.Body == nil {
+			continue
+		}
+		recvTypeName, recvParam, ok := classifySuiteReceiver(fn)
+		if !ok || !provableSuiteReceivers[recvTypeName] {
+			continue
+		}
+		if isValidTestName(fn.Name.Name, "Test") {
+			continue
+		}
+		var mockFields map[string]bool
+		if suiteGomockFields != nil {
+			mockFields = suiteGomockFields[recvTypeName]
+		}
+		assertions := findExecutableAssertions(
+			fn,
+			nil,
+			recvParam,
+			recvTypeName,
+			ctx,
+			assertingHelpers,
+			declaredTopLevelFuncs,
+			nil,
+			mockFields,
+			sameFileExpectTypes,
+		)
+		if len(assertions) > 0 {
+			if suiteHelpers[recvTypeName] == nil {
+				suiteHelpers[recvTypeName] = make(map[string]bool)
+			}
+			suiteHelpers[recvTypeName][fn.Name.Name] = true
+		}
+	}
+	return suiteHelpers
+}
+func buildTestUnit(
+	fn *ast.FuncDecl,
+	fset *token.FileSet,
+	source []byte,
+	srcLen int,
+	filePath string,
+	kind string,
+	name string,
+	assertions []string,
+	fileImports map[string]string,
+) parser.TestUnit {
+	declStart := fset.Position(fn.Pos())
+	declEnd := fset.Position(fn.End())
+
+	bodyStartOff := fset.Position(fn.Body.Pos()).Offset
+	bodyEndOff := fset.Position(fn.Body.End()).Offset
+	if bodyStartOff < 0 {
+		bodyStartOff = 0
+	}
+	if bodyEndOff > srcLen {
+		bodyEndOff = srcLen
+	}
+
+	rawBody := ""
+	if bodyStartOff < bodyEndOff {
+		rawBody = string(source[bodyStartOff:bodyEndOff])
+	}
+
+	return parser.TestUnit{
+		Name:        name,
+		FilePath:    filePath,
+		StartLine:   declStart.Line,
+		EndLine:     declEnd.Line,
+		Kind:        kind,
+		RawBody:     rawBody,
+		Assertions:  assertions,
+		ASTDecl:     fn,
+		FileSet:     fset,
+		FileImports: fileImports,
+	}
 }
 
 // LocateTests parses Go source using go/parser and extracts genuine executable test declarations.
@@ -396,6 +1312,91 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	imports := resolveImports(fileAST)
 	examples := runnableExamples(fileAST)
 
+	declaredTopLevelFuncs := make(map[string]*ast.FuncDecl)
+	for _, decl := range fileAST.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name != nil {
+			declaredTopLevelFuncs[fn.Name.Name] = fn
+		}
+	}
+
+	provableSuiteReceivers := findEmbeddedSuiteStructs(fileAST, imports)
+	assertingHelpers := collectAssertingHelpers(fileAST, imports, declaredTopLevelFuncs)
+
+	sameFileExpectTypes := make(map[string]bool)
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 || fn.Name == nil {
+			continue
+		}
+		if fn.Name.Name == "EXPECT" {
+			typeName := getReceiverTypeName(fn.Recv.List[0].Type)
+			if typeName != "" {
+				sameFileExpectTypes[typeName] = true
+			}
+		}
+	}
+
+	suiteGomockFields := make(map[string]map[string]bool)
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Name == nil || fn.Body == nil {
+			continue
+		}
+		recvTypeName, recvParam, ok := classifySuiteReceiver(fn)
+		if !ok || !provableSuiteReceivers[recvTypeName] {
+			continue
+		}
+		mName := fn.Name.Name
+		if mName == "SetupTest" || mName == "SetupSuite" || mName == "SetupSubTest" {
+			controllers := make(map[*ast.Object]bool)
+			ctrlFields := make(map[string]bool)
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.AssignStmt:
+					if len(node.Lhs) != 1 || len(node.Rhs) != 1 {
+						return true
+					}
+					call, ok := node.Rhs[0].(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "NewController" {
+						if pkgIdent, ok := sel.X.(*ast.Ident); ok && pkgIdent.Obj == nil && isGomockImportPath(imports.localNames[pkgIdent.Name]) {
+							if lhsIdent, ok := node.Lhs[0].(*ast.Ident); ok && lhsIdent.Obj != nil {
+								controllers[lhsIdent.Obj] = true
+							} else if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+								if ident, ok := lhsSel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+									ctrlFields[lhsSel.Sel.Name] = true
+								}
+							}
+						}
+					}
+					if isGomockConstructorCall(call, controllers, ctrlFields, recvParam, imports, nil, declaredTopLevelFuncs) {
+						if lhsSel, ok := node.Lhs[0].(*ast.SelectorExpr); ok {
+							if ident, ok := lhsSel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+								if suiteGomockFields[recvTypeName] == nil {
+									suiteGomockFields[recvTypeName] = make(map[string]bool)
+								}
+								suiteGomockFields[recvTypeName][lhsSel.Sel.Name] = true
+							}
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	suiteReceiverHelpers := collectSuiteReceiverHelpers(
+		fileAST,
+		imports,
+		provableSuiteReceivers,
+		assertingHelpers,
+		declaredTopLevelFuncs,
+		suiteGomockFields,
+		sameFileExpectTypes,
+	)
+
 	var units []parser.TestUnit
 	srcLen := len(source)
 
@@ -404,47 +1405,63 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		if !ok {
 			continue
 		}
-		signature, isTest := classifyGoTestFunc(fn, imports)
-		if !isTest {
+
+		// Top-level test / benchmark / fuzz / example
+		if fn.Recv == nil {
+			signature, isTest := classifyGoTestFunc(fn, imports)
+			if !isTest {
+				continue
+			}
+			// Compile-only examples without an output comment are not executed.
+			if signature.Kind == "example" && !examples[fn.Name.Name] {
+				continue
+			}
+
+			kind := signature.Kind
+			if kind == "unit" && (hasSuiteRunCall(fn.Body, imports) || isPureDelegatingRunner(fn.Body, signature.Param)) {
+				kind = "suite_runner"
+			}
+
+			var testParams []*ast.Object
+			if signature.Param != nil {
+				testParams = append(testParams, signature.Param)
+			}
+
+			assertions := findExecutableAssertions(
+				fn,
+				testParams,
+				nil,
+				"",
+				imports,
+				assertingHelpers,
+				declaredTopLevelFuncs,
+				nil,
+				nil,
+				sameFileExpectTypes,
+			)
+			units = append(units, buildTestUnit(fn, fset, source, srcLen, filePath, kind, fn.Name.Name, assertions, imports.localNames))
 			continue
 		}
-		// Compile-only examples without an output comment are not executed.
-		if signature.Kind == "example" && !examples[fn.Name.Name] {
+
+		// testify/suite test method
+		recvTypeName, recvParam, ok := classifySuiteMethod(fn)
+		if !ok || !provableSuiteReceivers[recvTypeName] {
 			continue
 		}
-
-		// Function declaration span
-		declStart := fset.Position(fn.Pos())
-		declEnd := fset.Position(fn.End())
-
-		// Extract function body block { ... } as RawBody so declaration names
-		// do not prevent identical test bodies from matching in clone detection (R1)
-		bodyStartOff := fset.Position(fn.Body.Pos()).Offset
-		bodyEndOff := fset.Position(fn.Body.End()).Offset
-		if bodyStartOff < 0 {
-			bodyStartOff = 0
-		}
-		if bodyEndOff > srcLen {
-			bodyEndOff = srcLen
-		}
-
-		rawBody := ""
-		if bodyStartOff < bodyEndOff {
-			rawBody = string(source[bodyStartOff:bodyEndOff])
-		}
-
-		units = append(units, parser.TestUnit{
-			Name:        fn.Name.Name,
-			FilePath:    filePath,
-			StartLine:   declStart.Line,
-			EndLine:     declEnd.Line,
-			Kind:        signature.Kind,
-			RawBody:     rawBody,
-			Assertions:  findExecutableAssertions(fn, signature.Param, imports.localNames),
-			ASTDecl:     fn,
-			FileSet:     fset,
-			FileImports: imports.localNames,
-		})
+		unitName := recvTypeName + "." + fn.Name.Name
+		assertions := findExecutableAssertions(
+			fn,
+			nil,
+			recvParam,
+			recvTypeName,
+			imports,
+			assertingHelpers,
+			declaredTopLevelFuncs,
+			suiteReceiverHelpers,
+			suiteGomockFields[recvTypeName],
+			sameFileExpectTypes,
+		)
+		units = append(units, buildTestUnit(fn, fset, source, srcLen, filePath, "unit", unitName, assertions, imports.localNames))
 	}
 
 	return units, nil

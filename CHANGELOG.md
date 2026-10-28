@@ -6,7 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
-## [0.1.4] - Unreleased
+## [0.1.5] - 2026-10-28
+
+### Removed
+- **Dead Subcommand**:
+  - Removed dead `testguard init` command and associated `testguard.yaml` starter generation (misleading configuration documentation removed).
+- **Low-Precision Rules Deleted**:
+  - `GUARD-DART-UNCOVERED-MUTATION`: Deleted keyword + literal `isFetching` heuristic rule.
+  - `GUARD-DART-DISGUISED-MIRROR`: Deleted rule penalizing `.having()` on mutated fields.
+  - `GUARD-GO-02`: Deleted port-only mocking rule that flagged legitimate repository/adapter tests using `sqlmock`.
+
+### Changed
+- **Scope Exclusions & Deduplication**:
+  - Traversal automatically skips linked git worktrees (subdirectories containing `.git` file pointing to worktrees) with reason `linked_worktree`.
+  - Added `vendor/` and `third_party/` directories to default skipped directory set (`default_directory`).
+- **Zero-Assertion Accuracy Overhaul**:
+  - **Go**: `findExecutableAssertions` now identifies assertions in `t.Run` closures, resolves testify suite runner and pure delegating `t.Run` runner (`suite_runner`) units, in-file embedded suite receiver methods (`suite.Suite`), inspects one-hop same-file helpers taking `*testing.T`/`testing.TB`, and tracks gomock controller expectations with package-qualified mock constructors, mock provenance, and function-level controller/chained-EXPECT pairing (tradeoff: cross-file mock helpers are credited when paired with NewController, while bare unchained EXPECT without controller receives no credit). Checked sqlmock results are recognized through their actual assertion/failure branch (`t.Fatal`/`t.Error`/`require`), not by verification call alone.
+  - **Accepted Limitations**: Split-file testify suites are not analyzed (only in-file structs embedding `suite.Suite` qualify); cross-file helpers are not resolved except the documented external mock-factory and `t.Run` delegation policies.
+  - **TypeScript / JavaScript**: Paren-aware raw body extraction for expression-bodied tests (`it('x', () => expect(a).toBe(1))`) and one-hop same-file helper resolution (`expectCartEmpty()`).
+  - **Dart**: One-hop same-file helper resolution appending `helper:<name>` assertions; string/comment-aware paren matching for `blocTest` argument bodies preventing mid-setUp truncation.
+- **Rule Refinements & Severity Adjustments**:
+  - `GUARD-REACT-02`: Severity changed to Warning. Excludes delay `0` flushes, mock latency callbacks (`mockImplementation`), class bodies, and files using `useFakeTimers()`. Only evaluates non-E2E unit tests.
+  - `GUARD-DART-BLOC-DUPLICATE`: Compares the entire `blocTest` scenario (build/setUp/seed/act/expect/skip/verify) as an exact, string-preserving token stream with comments dropped, instead of only the act and expect blocks.
+  - `GUARD-UNIV-01` / `GUARD-UNIV-02`: Exact-token duplicates always report as `GUARD-UNIV-01` "Duplicate test body", whatever the group size. Literal-only variants report as `GUARD-UNIV-01` "Similar test structure" when there are 2–3 distinct variants, and as `GUARD-UNIV-02` "Structural repetition" when there are ≥4.
+  - `GUARD-GO-03`: A table is now only a composite literal bound to an identifier that is ranged over with a testing `t.Run` (including nested testing closures and suite `Run`). Rows are compared ignoring `name`/`desc`/`description`/`title` fields, and tables whose loop branches on the name field are skipped. Mock fixtures, expected-output slices and dedup inputs are no longer treated as tables.
+
+### Added
+- **Hygiene & E2E Rules**:
+  - `GUARD-UNIV-TAUTOLOGY` (Blocker): Flags trivial tautological assertions such as `expect(true).toBe(true)` or `assert.True(t, true)`.
+  - `GUARD-UNIV-SKIP` (Warning): Detects permanently skipped tests (`it.skip`, `skip: true`, unconditional `t.Skip`).
+  - `GUARD-E2E-01` (Warning): Catches arbitrary hard wait timers in E2E tests (`page.waitForTimeout(3000)`, `Future.delayed(2s)`).
+
+---
+## [0.1.4] - 2026-10-28
 
 ### Breaking Changes
 - **Versioned Machine-Readable JSON Envelope (`schema_version: 1`)**:

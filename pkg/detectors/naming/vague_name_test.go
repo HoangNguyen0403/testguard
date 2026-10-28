@@ -9,8 +9,8 @@ import (
 
 func TestDetectVagueTestNames(t *testing.T) {
 	tests := []struct {
-		name        string
-		shouldFlag  bool
+		name       string
+		shouldFlag bool
 	}{
 		{"test 1", true},
 		{"sample", true},

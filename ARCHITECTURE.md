@@ -34,7 +34,7 @@ pkg/updater/                 # Self-updating mechanism via GitHub Releases API
 
 | Package | Responsibility | Invariants & Constraints |
 |---|---|---|
-| `cmd/testguard` | CLI commands (`explain`, `rules`, `update`, `init`), flags, wiring reporters to engine. | Coordinates I/O; never contains AST parsing or rule logic. |
+| `cmd/testguard` | CLI commands (`explain`, `rules`, `update`), flags, wiring reporters to engine. | Coordinates I/O; never contains AST parsing or rule logic. |
 | `pkg/engine` | Directory traversal (`FindTestFiles`), module identification, rule dispatch, suppression filtering. | Must remain headless; accepts `Options.ProgressFn` for event emission. |
 | `pkg/parser` | Defines `LanguageAdapter` interface and `TestUnit` AST representations. | Implementations must handle malformed syntax without crashing. |
 | `pkg/detectors` | Language-agnostic smells: test cloning (`clone`), vague naming (`naming`), missing assertions (`zeroassert`). | Operates on generic token streams or `TestUnit` abstractions. |
@@ -165,7 +165,7 @@ type ScanReport = {
     files: string[];        // sorted unique analyzed files (cwd-relative slash paths)
     excluded: { path: string; reason: "default_directory" | "generated" | "non_test" }[];
     unsupported: string[];  // explicit unsupported target file paths
-    config_applied: false;  // config files (e.g. testguard.yaml) are not applied
+    config_applied: false;  // repository config files are not applied
   };
   analysis: {
     status: "complete" | "incomplete" | "not_applicable" | "error";

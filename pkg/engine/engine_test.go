@@ -25,7 +25,7 @@ func TestEngineAuditDartBlocFile(t *testing.T) {
 	content := []byte(`
 void main() {
   blocTest<CustomerCodeBloc, CustomerCodeState>(
-    'Fetch_MissingLoadingState',
+    'SeedEcho_Test',
     seed: () => baseState.copyWith(userInfo: fakeUser),
     build: () => CustomerCodeBloc(),
     act: (bloc) => bloc.add(const CustomerCodeEvent.fetch()),
@@ -50,20 +50,13 @@ void main() {
 		fmt.Printf("Detected violation: %+v\n", v)
 	}
 
-	hasUncoveredMutation := false
 	hasSeedEcho := false
 	for _, v := range res.Violations {
-		if v.RuleID == "GUARD-DART-UNCOVERED-MUTATION" && v.Severity == models.SeverityBlocker {
-			hasUncoveredMutation = true
-		}
 		if v.RuleID == "GUARD-DART-SEED-ECHO" && v.Severity == models.SeverityWarning {
 			hasSeedEcho = true
 		}
 	}
 
-	if !hasUncoveredMutation {
-		t.Errorf("expected to detect GUARD-DART-UNCOVERED-MUTATION")
-	}
 	if !hasSeedEcho {
 		t.Errorf("expected to detect GUARD-DART-SEED-ECHO")
 	}
@@ -727,7 +720,7 @@ func TestServiceOrder(t *testing.T) {
 	}
 
 	for _, f := range resQuoted.Report.Findings {
-		if f.RuleID == "GUARD-GO-01" || f.RuleID == "GUARD-GO-02" || f.RuleID == "GUARD-GO-03" {
+		if f.RuleID == "GUARD-GO-01" || f.RuleID == "GUARD-GO-03" {
 			t.Errorf("unexpected violation %s in quoted test: %+v", f.RuleID, f)
 		}
 	}
@@ -769,8 +762,9 @@ func TestExecutableServiceSqlmock(t *testing.T) {
         {in: 100, want: 10},
         {in: 100, want: 10},
     }
-    _ = tests
-    t.Fatal("fail")
+    for _, tc := range tests {
+        t.Run("sub", func(t *testing.T) { _ = tc })
+    }
 }
 `)
 	_ = os.WriteFile(serviceExecFile, serviceExecContent, 0644)
@@ -790,10 +784,6 @@ func TestExecutableServiceSqlmock(t *testing.T) {
 			if f.LineNumber != 8 {
 				t.Errorf("expected GUARD-GO-01 at line 8, got %d", f.LineNumber)
 			}
-		case "GUARD-GO-02":
-			if f.LineNumber != 8 {
-				t.Errorf("expected GUARD-GO-02 at line 8, got %d", f.LineNumber)
-			}
 		case "GUARD-GO-03":
 			if f.LineNumber != 15 {
 				t.Errorf("expected GUARD-GO-03 at line 15, got %d", f.LineNumber)
@@ -804,14 +794,11 @@ func TestExecutableServiceSqlmock(t *testing.T) {
 	if !foundRules["GUARD-GO-01"] {
 		t.Errorf("expected GUARD-GO-01 to be detected in executable domain test")
 	}
-	if !foundRules["GUARD-GO-02"] {
-		t.Errorf("expected GUARD-GO-02 to be detected in executable service test")
-	}
 	if !foundRules["GUARD-GO-03"] {
 		t.Errorf("expected GUARD-GO-03 to be detected in executable table test")
 	}
 
-	// 3. Scan pkg/rules/golang/rules_test.go directly: must produce ZERO GUARD-GO-02 or GUARD-GO-03 false positives
+	// 3. Scan pkg/rules/golang/rules_test.go directly: must produce ZERO GUARD-GO-03 false positives
 	resRulesTest, err := eng.Run(engine.Options{
 		TargetPaths: []string{"pkg/rules/golang/rules_test.go"},
 	})
@@ -819,7 +806,7 @@ func TestExecutableServiceSqlmock(t *testing.T) {
 		t.Fatalf("unexpected error scanning rules_test.go: %v", err)
 	}
 	for _, f := range resRulesTest.Report.Findings {
-		if f.RuleID == "GUARD-GO-02" || f.RuleID == "GUARD-GO-03" {
+		if f.RuleID == "GUARD-GO-03" {
 			t.Errorf("false positive: rules_test.go triggered %s: %+v", f.RuleID, f)
 		}
 	}
@@ -852,20 +839,13 @@ func TestMain(m *testing.M) {
 			resTestMain.Report.Analysis.Status, resTestMain.Report.Analysis.Reason, resTestMain.Report.ExitCode)
 	}
 
-	// 5. DAO root-relative directory exemption (R3)
+	// 5. DAO root-relative directory has no false positives
 	daoDir := filepath.Join(tmpDir, "dao")
 	_ = os.MkdirAll(daoDir, 0755)
 	daoFile := filepath.Join(daoDir, "order_dao_test.go")
 	_ = os.WriteFile(daoFile, []byte(`package dao_test
-import (
-    "testing"
-    "github.com/DATA-DOG/go-sqlmock"
-)
+import "testing"
 func TestOrderDAO(t *testing.T) {
-    db, mock, err := sqlmock.New()
-    _ = db
-    _ = mock
-    _ = err
     t.Fatal("fail")
 }
 `), 0644)
@@ -875,11 +855,10 @@ func TestOrderDAO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error scanning DAO file: %v", err)
 	}
-	for _, f := range resDAO.Report.Findings {
-		if f.RuleID == "GUARD-GO-02" {
-			t.Errorf("expected DAO file %s to be exempted from GUARD-GO-02, but violation was emitted", daoFile)
-		}
+	if len(resDAO.Report.Findings) != 0 {
+		t.Errorf("expected DAO file %s to have 0 findings, got %+v", daoFile, resDAO.Report.Findings)
 	}
+
 }
 
 func TestEngineGoEntryPointProvenanceCounts(t *testing.T) {
@@ -1111,26 +1090,23 @@ func TestDisjointReceiverReuse(t *testing.T) {
 	}
 }
 
-func TestEngineGoUnaliasedPackageCallBeforeLocalShadow(t *testing.T) {
+func TestEngineGoDomainPackageCallBeforeLocalShadow(t *testing.T) {
 	tmpDir := t.TempDir()
-	file := filepath.Join(tmpDir, "service", "shadow_test.go")
-	_ = os.MkdirAll(filepath.Dir(file), 0755)
-	_ = os.WriteFile(file, []byte(`package service_test
-
+	domainDir := filepath.Join(tmpDir, "domain")
+	_ = os.MkdirAll(domainDir, 0755)
+	file := filepath.Join(domainDir, "order_test.go")
+	_ = os.WriteFile(file, []byte(`package domain_test
 import (
 	"testing"
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/golang/mock/gomock"
 )
-
-func TestPackageCallBeforeShadow(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	_ = db
-	_ = mock
-	_ = err
+func TestDomainPackageCallBeforeShadow(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_ = ctrl
 	{
-		sqlmock := newFakeScope()
-		res := sqlmock.New()
-		_ = res
+		gomock := newFakeScope()
+		other := gomock.NewController(t)
+		_ = other
 	}
 	t.Fatal("control")
 }
@@ -1144,16 +1120,248 @@ func TestPackageCallBeforeShadow(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var portFindings []models.Violation
+	var domainFindings []models.Violation
 	for _, finding := range res.Report.Findings {
-		if finding.RuleID == "GUARD-GO-02" {
-			portFindings = append(portFindings, finding)
+		if finding.RuleID == "GUARD-GO-01" {
+			domainFindings = append(domainFindings, finding)
 		}
 	}
-	if len(portFindings) != 1 {
-		t.Fatalf("expected exactly 1 GUARD-GO-02 for the genuine package call, got %d (%+v)", len(portFindings), res.Report.Findings)
+	if len(domainFindings) != 1 {
+		t.Fatalf("expected exactly 1 GUARD-GO-01 for the genuine package call, got %d (%+v)", len(domainFindings), res.Report.Findings)
 	}
-	if portFindings[0].LineNumber != 9 {
-		t.Errorf("expected genuine package call at line 9, got %d", portFindings[0].LineNumber)
+	if domainFindings[0].LineNumber != 7 {
+		t.Errorf("expected genuine package call at line 7, got %d", domainFindings[0].LineNumber)
 	}
+}
+
+func TestEngineTS_ZeroAssertAccuracy(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "cart.test.ts")
+	src := []byte(`
+function expectCartEmpty() {
+  expect(cart.items.length).toBe(0);
+}
+
+const verifyItemCount = (count: number) => {
+  expect(cart.items.length).toBe(count);
+};
+
+const helperNoAssert = () => {
+  console.log("nothing");
+};
+
+it('expression-bodied test', () => expect(1).toBe(1));
+
+it('calls asserting helper', () => {
+  expectCartEmpty();
+});
+
+it('calls arrow asserting helper', () => {
+  verifyItemCount(3);
+});
+
+it('calls non-asserting helper', () => {
+  helperNoAssert();
+});
+
+it('empty test without assertions', () => {
+});
+`)
+	_ = os.WriteFile(testFile, src, 0644)
+
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{testFile},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error running engine: %v", err)
+	}
+
+	var zeroFindings []models.Violation
+	for _, f := range res.Report.Findings {
+		if f.RuleID == "GUARD-UNIV-ZERO" {
+			zeroFindings = append(zeroFindings, f)
+		}
+	}
+
+	// Only 'calls non-asserting helper' and 'empty test without assertions' should be flagged
+	if len(zeroFindings) != 2 {
+		t.Fatalf("expected exactly 2 GUARD-UNIV-ZERO findings, got %d: %+v", len(zeroFindings), zeroFindings)
+	}
+}
+func TestF1_TSHelperCommentsAndMemberCalls(t *testing.T) {
+	eng := engine.New()
+
+	t.Run("commented helper declaration not credited", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "comment_helper.test.ts")
+		_ = os.WriteFile(p, []byte("/*\nfunction check() { expect(actual).toBe(2); }\n*/\nit('hollow', () => { check(); });"), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO violation, got %v", res.Violations)
+		}
+	})
+
+	t.Run("member method call not credited as top-level helper", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "property_helper.test.ts")
+		_ = os.WriteFile(p, []byte("function check() { expect(actual).toBe(2); }\nit('hollow', () => { const obj = { check() {} }; obj.check(); });"), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO violation, got %v", res.Violations)
+		}
+	})
+}
+
+func TestF2_TSMultilineExpressionArrow(t *testing.T) {
+	eng := engine.New()
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "multiline_helper.test.ts")
+	_ = os.WriteFile(p, []byte("const check = () =>\n  (\n    expect(actual).toBe(2)\n  );\nit('asserting', () => { check(); });"), 0644)
+	res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("expected 0 violations for asserting multiline helper, got %v", res.Violations)
+	}
+}
+func TestReReview2_N1_N2_N3_N5_E1(t *testing.T) {
+	eng := engine.New()
+
+	t.Run("N1: fake controller emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "fake_controller_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+type fake struct{}
+func(fake) EXPECT(){}
+type factory struct{}
+func(factory) NewController() int{return 0}
+func NewMockDummy(int) fake{return fake{}}
+func TestHollow(t *testing.T){f:=factory{};m:=NewMockDummy(f.NewController());m.EXPECT()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N1: suite ctrl int emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "suite_ctrl_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "github.com/stretchr/testify/suite"
+type fake struct{}
+func(fake) EXPECT(){}
+func NewMockDummy(int) fake{return fake{}}
+type S struct{suite.Suite;ctrl int;repo fake}
+func(s *S) SetupTest(){s.repo=NewMockDummy(s.ctrl)}
+func(s *S) TestHollow(){s.repo.EXPECT()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N2: field collision emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "field_collision_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type fake struct{}
+func(fake) EXPECT(){}
+type box struct{repo any}
+func TestHollow(t *testing.T){ctrl:=gomock.NewController(t);m:=NewMockRepo(ctrl);a:=box{};a.repo=m;b:=struct{repo fake}{repo:fake{}};b.repo.EXPECT();_ = a}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N3: suite skip unrelated package emits no findings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "suite_skip_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "example.test/custom"
+type S struct{named custom.Suite}
+func(s *S) T() *custom.T {return nil}
+func(s *S) TestUtility(){s.T().Skip("not a test")}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 0 {
+			t.Errorf("expected 0 violations, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N5: go03 nested testing param emits GO-03", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "go03_nested_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+func TestRows(t *testing.T){cases:=[]struct{name string;n int}{{"a",1},{"b",1}};t.Run("parent",func(t *testing.T){for _,tc:=range cases{t.Run(tc.name,func(t *testing.T){if tc.n!=1{t.Fatal(tc.n)}})}})}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-GO-03" {
+			t.Errorf("expected 1 GUARD-GO-03, got %v", res.Violations)
+		}
+	})
+
+	t.Run("E1: go03 tagless switch emits no findings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "go03_tagless_switch_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+func TestRows(t *testing.T){cases:=[]struct{name string;n int}{{"a",1},{"b",1}};for _,tc:=range cases{t.Run(tc.name,func(t *testing.T){switch{case tc.name=="a":if tc.n!=1{t.Fatal(tc.n)};default:if tc.n!=2{t.Fatal(tc.n)}}})}}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 0 {
+			t.Errorf("expected 0 violations, got %v", res.Violations)
+		}
+	})
+
+	t.Run("Task 9 safety flag: same-file EXPECT non-mock emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "nonmock_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type logger struct{}
+func(logger) EXPECT() logger{return logger{}}
+func(logger) Info(){}
+func TestHollow(t *testing.T){_ = gomock.NewController(t);log:=logger{};log.EXPECT().Info()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
 }

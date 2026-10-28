@@ -54,7 +54,7 @@ testguard explain GUARD-DART-SEED-ECHO
 - **`--all` (`-a`)**: Force full scan across all candidate test files.
 - **`--allow-empty`**: Permits scanning targets with zero analyzable test declarations. Without this flag, discovering zero test declarations is considered an incomplete scan (exit `2`, `empty_scope`). With `--allow-empty`, an empty scan with no findings produces exit `3` (`not_applicable / empty_allowed`).
 - **`--diff` (`-d`) Unsupported**: The `--diff` flag is not implemented and is explicitly rejected with exit `2` (`invalid_usage`). Scans operate in full target mode.
-- **Configuration (`testguard.yaml`)**: Checked-in `testguard.yaml` files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
+- **Limiting Scope**: Pass explicit paths, e.g. `testguard path/to/module`. Linked git worktrees and `vendor/` / `third_party/` directories are skipped automatically. Repository configuration files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
 - **Flag Compatibility Restrictions**:
   - **`--json` with `-f azure` is Rejected**: Combining `--json` with `-f azure` is invalid usage (exit `2`, `invalid_usage`). `--json` is compatible only with default console mode or explicit `-f json`.
   - **Explicit `--output` with `--json` / `-f azure` is Rejected**: Supplying `--output` (including empty values like `--output=""`) when running in `--json` or `-f azure` mode is invalid usage (exit `2`). `--output` is reserved strictly for console Markdown export, not a secondary file destination.
@@ -125,12 +125,14 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 
 ## 🎯 Supported Ecosystems & Rules
 
-| Language | Test Runners | Key Guardrails |
+| Language / Scope | Test Runners | Key Guardrails |
 |---|---|---|
-| **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps disguised state mirrors, seed echoes, and uncovered loading mutations (`isFetching = true`). |
-| **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models) and port-only mocking. |
-| **TypeScript / Web** | `jest`, `vitest` | Catches shallow mock echoes and snapshot-only test smells. |
-
+| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), exact token duplicates (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), and placeholder test names (`GUARD-UNIV-NAME`). |
+| **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps seed echoes (`GUARD-DART-SEED-ECHO`), identical whole-scenario BLoC duplicates (`GUARD-DART-BLOC-DUPLICATE`), and pass-through mock echoes (`GUARD-DART-MOCK-ECHO`). |
+| **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models: `GUARD-GO-01`) and table-test duplicate input rows (`GUARD-GO-03`). |
+| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps > 0 ms in unit tests (`GUARD-REACT-02`), shallow mock echoes (`GUARD-REACT-01`), NestJS controller echoes & unmocked DB leaks, and massive snapshot-only smells (`GUARD-TS-01`). |
+| **E2E / Integration** | `Playwright`, `Flutter IntegrationTest` | Fixed arbitrary hard waits in end-to-end tests (`GUARD-E2E-01`). |
+| **Mobile (Android/iOS)** | `MockK`, `XCTest` | MockK pass-through echoes, unadvanced coroutines, and excessive expectation timeouts. |
 ---
 
 ## 📄 Documentation

@@ -57,8 +57,7 @@ jobs:
           "$BIN" --version
           "$BIN" rules
           "$BIN" explain GUARD-DART-SEED-ECHO
-          "$BIN" explain GUARD-DART-UNCOVERED-MUTATION
-          "$BIN" init
+          "$BIN" explain GUARD-UNIV-TAUTOLOGY
 
       - name: Observe full repository test quality scan (non-blocking)
         continue-on-error: true

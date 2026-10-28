@@ -14,38 +14,6 @@ import (
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
 )
 
-var (
-	repoOrInfraDirSegments = []string{
-		"/repository/",
-		"/infrastructure/",
-		"/database/",
-		"/db/",
-		"/dao/",
-		"/store/",
-	}
-	repoOrInfraFileSuffixes = []string{
-		"_repository_test.go",
-		"_repo_test.go",
-		"_dao_test.go",
-		"_store_test.go",
-	}
-)
-
-func isRepositoryOrInfraLayer(filePath string) bool {
-	normalized := "/" + strings.ToLower(strings.TrimPrefix(filepath.ToSlash(filePath), "/"))
-	for _, seg := range repoOrInfraDirSegments {
-		if strings.Contains(normalized, seg) {
-			return true
-		}
-	}
-	for _, suf := range repoOrInfraFileSuffixes {
-		if strings.HasSuffix(normalized, suf) {
-			return true
-		}
-	}
-	return false
-}
-
 // getUnitAST retrieves or parses the AST declaration and token.FileSet for a TestUnit.
 func getUnitAST(unit parser.TestUnit) (*token.FileSet, *ast.FuncDecl, error) {
 	if unit.ASTDecl != nil {
@@ -230,104 +198,6 @@ func (r *DomainPurityRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	return violations
 }
 
-// PortMockingRule verifies that service/usecase tests mock interface ports, not concrete database drivers.
-// Note: Helper-mediated database instantiation outside the test AST is outside static boundary.
-type PortMockingRule struct{}
-
-func NewPortMockingRule() *PortMockingRule {
-	return &PortMockingRule{}
-}
-
-func (r *PortMockingRule) Evaluate(unit parser.TestUnit) []models.Violation {
-	var violations []models.Violation
-
-	if isRepositoryOrInfraLayer(unit.FilePath) {
-		return violations
-	}
-
-	fset, fn, err := getUnitAST(unit)
-	if err != nil {
-		return violations
-	}
-
-	seenLines := make(map[int]bool)
-
-	ast.Inspect(fn, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-
-		identName := ident.Name
-		methodName := sel.Sel.Name
-		isViolation := false
-
-		// A lexically bound identifier is not an imported package qualifier.
-		if isLocalReceiver(ident) {
-			return true
-		}
-
-		if len(unit.FileImports) > 0 {
-			importPath, isImported := unit.FileImports[identName]
-			if isImported {
-				if strings.Contains(importPath, "sqlmock") && strings.HasPrefix(methodName, "New") {
-					isViolation = true
-				}
-				if strings.Contains(importPath, "pgxmock") && strings.HasPrefix(methodName, "New") {
-					isViolation = true
-				}
-				if strings.Contains(importPath, "gorm") && methodName == "Open" {
-					isViolation = true
-				}
-			}
-		} else {
-			// Fallback heuristic for synthetic units without import carrier
-			pkgName := strings.ToLower(identName)
-			switch pkgName {
-			case "sqlmock":
-				if strings.HasPrefix(methodName, "New") {
-					isViolation = true
-				}
-			case "pgxmock":
-				if strings.HasPrefix(methodName, "New") {
-					isViolation = true
-				}
-			case "gorm":
-				if methodName == "Open" {
-					isViolation = true
-				}
-			}
-		}
-
-		if isViolation {
-			line, col := getNodeLineAndColumn(fset, call, unit)
-			if !seenLines[line] {
-				seenLines[line] = true
-				violations = append(violations, models.Violation{
-					RuleID:     "GUARD-GO-02",
-					Severity:   models.SeverityWarning,
-					FilePath:   unit.FilePath,
-					LineNumber: line,
-					Column:     col,
-					Message:    fmt.Sprintf("Port mocking violation in '%s': mocking concrete database connection instead of exported interface Port.", unit.Name),
-					Suggestion: "Define and mock an abstract repository interface (e.g. domain.UserRepository) rather than concrete database connections.",
-				})
-			}
-		}
-		return true
-	})
-
-	return violations
-}
-
 // TableDuplicateRule detects identical duplicate rows in Go table-driven tests.
 type TableDuplicateRule struct{}
 
@@ -408,32 +278,312 @@ func isTableComposite(compLit *ast.CompositeLit) bool {
 	return true
 }
 
+func isRecognizedTestingParam(expr ast.Expr, fileImports map[string]string) bool {
+	testingPkgName := "testing"
+	dotTesting := false
+	if fileImports != nil {
+		for local, path := range fileImports {
+			if path == "testing" {
+				if local == "." {
+					dotTesting = true
+				} else {
+					testingPkgName = local
+				}
+				break
+			}
+		}
+	}
+	if star, ok := expr.(*ast.StarExpr); ok {
+		if sel, ok := star.X.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == testingPkgName {
+				if sel.Sel.Name == "T" || sel.Sel.Name == "B" || sel.Sel.Name == "TB" {
+					return true
+				}
+			}
+		} else if ident, ok := star.X.(*ast.Ident); ok {
+			if dotTesting && (ident.Name == "T" || ident.Name == "B" || ident.Name == "TB") {
+				return true
+			}
+			if ident.Name == "T" || ident.Name == "B" || ident.Name == "TB" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.CompositeLit) (string, string) {
+	var rowLit *ast.CompositeLit
+	switch e := elt.(type) {
+	case *ast.CompositeLit:
+		rowLit = e
+	case *ast.UnaryExpr:
+		if e.Op == token.AND {
+			if cl, ok := e.X.(*ast.CompositeLit); ok {
+				rowLit = cl
+			}
+		}
+	}
+	if rowLit == nil {
+		var buf bytes.Buffer
+		_ = format.Node(&buf, fset, elt)
+		raw := strings.TrimSpace(buf.String())
+		return raw, raw
+	}
+
+	var fullBuf bytes.Buffer
+	_ = format.Node(&fullBuf, fset, elt)
+	fullContent := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(fullBuf.String()), "{"), "}"))
+
+	nameFieldIndex := -1
+	if compLit != nil {
+		if arrType, ok := compLit.Type.(*ast.ArrayType); ok {
+			var st *ast.StructType
+			switch eltType := arrType.Elt.(type) {
+			case *ast.StructType:
+				st = eltType
+			case *ast.Ident:
+				if eltType.Obj != nil && eltType.Obj.Kind == ast.Typ {
+					if ts, ok := eltType.Obj.Decl.(*ast.TypeSpec); ok {
+						if s, ok := ts.Type.(*ast.StructType); ok {
+							st = s
+						}
+					}
+				}
+			}
+			if st != nil && st.Fields != nil {
+				fieldIdx := 0
+				for _, field := range st.Fields.List {
+					if len(field.Names) == 0 {
+						fieldIdx++
+					} else {
+						for _, name := range field.Names {
+							low := strings.ToLower(name.Name)
+							if low == "name" || low == "desc" || low == "description" || low == "title" {
+								nameFieldIndex = fieldIdx
+							}
+							fieldIdx++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	var parts []string
+	for idx, f := range rowLit.Elts {
+		if kv, ok := f.(*ast.KeyValueExpr); ok {
+			if kIdent, ok := kv.Key.(*ast.Ident); ok {
+				low := strings.ToLower(kIdent.Name)
+				if low == "name" || low == "desc" || low == "description" || low == "title" {
+					continue
+				}
+			}
+			var buf bytes.Buffer
+			_ = format.Node(&buf, fset, kv)
+			parts = append(parts, buf.String())
+		} else {
+			if nameFieldIndex != -1 && idx == nameFieldIndex {
+				continue
+			}
+			var buf bytes.Buffer
+			_ = format.Node(&buf, fset, f)
+			parts = append(parts, buf.String())
+		}
+	}
+	return strings.Join(parts, ", "), fullContent
+}
+
 func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var violations []models.Violation
 
 	fset, fn, err := getUnitAST(unit)
-	if err != nil {
+	if err != nil || fn.Body == nil {
 		return violations
 	}
 
-	ast.Inspect(fn, func(n ast.Node) bool {
-		compLit, ok := n.(*ast.CompositeLit)
-		if !ok || !isTableComposite(compLit) {
+	testingParamObjs := make(map[*ast.Object]bool)
+	if fn.Type != nil && fn.Type.Params != nil {
+		for _, f := range fn.Type.Params.List {
+			if isRecognizedTestingParam(f.Type, unit.FileImports) {
+				for _, name := range f.Names {
+					if name.Obj != nil {
+						testingParamObjs[name.Obj] = true
+					}
+				}
+			}
+		}
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if fnLit, ok := n.(*ast.FuncLit); ok {
+			if fnLit.Type != nil && fnLit.Type.Params != nil {
+				for _, f := range fnLit.Type.Params.List {
+					if isRecognizedTestingParam(f.Type, unit.FileImports) {
+						for _, name := range f.Names {
+							if name.Obj != nil {
+								testingParamObjs[name.Obj] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	var suiteRecvObj *ast.Object
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		for _, name := range fn.Recv.List[0].Names {
+			if name.Obj != nil {
+				suiteRecvObj = name.Obj
+				break
+			}
+		}
+	}
+
+	assignedTables := make(map[*ast.Object]*ast.CompositeLit)
+	for _, stmt := range fn.Body.List {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range s.Lhs {
+				if ident, ok := lhs.(*ast.Ident); ok && ident.Obj != nil && i < len(s.Rhs) {
+					if compLit, ok := s.Rhs[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
+						assignedTables[ident.Obj] = compLit
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			if gen, ok := s.Decl.(*ast.GenDecl); ok && gen.Tok == token.VAR {
+				for _, spec := range gen.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						for i, name := range vs.Names {
+							if name.Obj != nil && i < len(vs.Values) {
+								if compLit, ok := vs.Values[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
+									assignedTables[name.Obj] = compLit
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(assignedTables) == 0 {
+		return violations
+	}
+
+	validTables := make(map[*ast.CompositeLit]bool)
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		ident, ok := rng.X.(*ast.Ident)
+		if !ok || ident.Obj == nil {
+			return true
+		}
+		compLit, exists := assignedTables[ident.Obj]
+		if !exists {
 			return true
 		}
 
-		// Table boundaries are isolated per composite literal
+		// R3: If the range body references the row's name field in a condition (if tt.name == ... / switch tt.name),
+		// the rows are conditionally branched by name and not duplicates by construction — skip that table.
+		var rowIdentObj *ast.Object
+		if valIdent, ok := rng.Value.(*ast.Ident); ok && valIdent.Obj != nil {
+			rowIdentObj = valIdent.Obj
+		}
+		if rowIdentObj != nil {
+			hasConditionOnName := false
+			checkExprForName := func(expr ast.Expr) bool {
+				found := false
+				ast.Inspect(expr, func(cn ast.Node) bool {
+					if sel, ok := cn.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
+							low := strings.ToLower(sel.Sel.Name)
+							if low == "name" || low == "desc" || low == "description" || low == "title" {
+								found = true
+								return false
+							}
+						}
+					}
+					return true
+				})
+				return found
+			}
+
+			ast.Inspect(rng.Body, func(bn ast.Node) bool {
+				switch stmt := bn.(type) {
+				case *ast.IfStmt:
+					if checkExprForName(stmt.Cond) {
+						hasConditionOnName = true
+						return false
+					}
+				case *ast.SwitchStmt:
+					if stmt.Tag != nil && checkExprForName(stmt.Tag) {
+						hasConditionOnName = true
+						return false
+					}
+				case *ast.CaseClause:
+					for _, expr := range stmt.List {
+						if checkExprForName(expr) {
+							hasConditionOnName = true
+							return false
+						}
+					}
+				}
+				return true
+			})
+			if hasConditionOnName {
+				return true
+			}
+		}
+
+		hasRunCall := false
+		ast.Inspect(rng.Body, func(bn ast.Node) bool {
+			call, ok := bn.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Run" {
+				return true
+			}
+			// Verify Run is called on recognized testing parameter or suite receiver
+			if id, ok := sel.X.(*ast.Ident); ok {
+				if testingParamObjs[id.Obj] || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
+					hasRunCall = true
+					return false
+				}
+			} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+					if id, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+						hasRunCall = true
+						return false
+					}
+				}
+			}
+			return true
+		})
+		if hasRunCall {
+			validTables[compLit] = true
+		}
+		return true
+	})
+	if len(validTables) == 0 {
+		return violations
+	}
+
+	for compLit := range validTables {
 		seenRows := make(map[string]bool)
 		for _, elt := range compLit.Elts {
-			var buf bytes.Buffer
-			if err := format.Node(&buf, fset, elt); err != nil {
+			normalizedKey, fullContent := normalizeRowContent(fset, elt, compLit)
+			if normalizedKey == "" {
 				continue
 			}
-			rawContent := strings.TrimSpace(buf.String())
-			// Strip outer braces if present for clean reporting
-			trimmedContent := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rawContent, "{"), "}"))
 
-			if seenRows[trimmedContent] {
+			if seenRows[normalizedKey] {
 				line, col := getNodeLineAndColumn(fset, elt, unit)
 				violations = append(violations, models.Violation{
 					RuleID:     "GUARD-GO-03",
@@ -441,17 +591,14 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 					FilePath:   unit.FilePath,
 					LineNumber: line,
 					Column:     col,
-					Message:    fmt.Sprintf("Duplicate table test row in '%s': row {%s} is duplicated.", unit.Name, trimmedContent),
+					Message:    fmt.Sprintf("Duplicate table test row in '%s': row {%s} is duplicated.", unit.Name, fullContent),
 					Suggestion: "Ensure each table test case tests a distinct equivalence class, boundary condition, or error scenario.",
 				})
-				// One duplicate row reported per table literal is sufficient
 				break
 			}
-			seenRows[trimmedContent] = true
+			seenRows[normalizedKey] = true
 		}
-
-		return true
-	})
+	}
 
 	return violations
 }

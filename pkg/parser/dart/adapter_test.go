@@ -3,6 +3,7 @@ package dart_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 )
@@ -62,6 +63,45 @@ void main() {
 	}
 	if len(simpleTest.Assertions) == 0 {
 		t.Errorf("expected simple test to have assertions detected")
+	}
+}
+func TestDartAdapter_32kNestedCallsPerformance(t *testing.T) {
+	n := 32000
+	src := "void main() {" + strings.Repeat("f(", n) + "0" + strings.Repeat(")", n) + ";}"
+	adapter := dart.NewAdapter()
+
+	start := time.Now()
+	units, err := adapter.LocateTests([]byte(src), "stress_test.dart")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("expected 0 units, got %d", len(units))
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected 32k nested calls to process in under 1s, took %v", elapsed)
+	}
+}
+
+func TestDartAdapter_32kNestedMapCallsPerformance(t *testing.T) {
+	n := 32000
+	src := "void main(){" + strings.Repeat("f(", n) + "{}" + strings.Repeat(")", n) + ";}"
+	adapter := dart.NewAdapter()
+
+	start := time.Now()
+	units, err := adapter.LocateTests([]byte(src), "nested_map_test.dart")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("expected 0 units, got %d", len(units))
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected 32k nested map calls to process in under 1s, took %v", elapsed)
 	}
 }
 
@@ -212,5 +252,193 @@ void main() {
 	}
 	if !strings.Contains(err.Error(), "unmatched brace") {
 		t.Errorf("expected error message mentioning unmatched brace, got %v", err)
+	}
+}
+
+func TestLocateUnitTestUnits_HelperAssertions(t *testing.T) {
+	source := []byte(`
+void verifyCartEmpty(tester) {
+  expect(find.byType(Cart), findsNothing);
+}
+
+void setupCart(tester) {
+  print('setting up cart');
+}
+
+void verifyTrackingArrow(String id) => expect(id, isNotEmpty);
+
+Future<void> expectCartEmptyAsync(tester) async {
+  await expectLater(tester, findsNothing);
+}
+void transitivelyCallsHelper(tester) {
+  verifyCartEmpty(tester);
+}
+
+void main() {
+  void nestedInsideMainHelper(tester) {
+    verify(mock.call());
+  }
+
+  testWidgets('cart is empty', (tester) async {
+    verifyCartEmpty(tester);
+  });
+
+  testWidgets('cart setup only', (tester) async {
+    setupCart(tester);
+  });
+
+  test('resolves helper defined later', () {
+    verifyTrackingLater('checkout_step');
+  });
+
+  test('calls arrow helper', () {
+    verifyTrackingArrow('123');
+  });
+
+  testWidgets('async helper call', (tester) async {
+    await expectCartEmptyAsync(tester);
+  });
+
+  test('checkCondition', () {
+    if (true) {
+      print('hello');
+    }
+  });
+
+  testWidgets('one-hop only ignores transitive helper', (tester) async {
+    transitivelyCallsHelper(tester);
+  });
+
+  testWidgets('direct assertion and helper together', (tester) async {
+    verifyCartEmpty(tester);
+    expect(true, isTrue);
+  });
+
+  testWidgets('nested helper inside main', (tester) async {
+    nestedInsideMainHelper(tester);
+  });
+}
+
+void verifyTrackingLater(String step) {
+  expect(step, isNotEmpty);
+}
+`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "helpers_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 9 {
+		t.Fatalf("expected 9 test units, got %d", len(units))
+	}
+
+	expected := map[string][]string{
+		"cart is empty":                          {"helper:verifyCartEmpty"},
+		"cart setup only":                        {},
+		"resolves helper defined later":          {"helper:verifyTrackingLater"},
+		"calls arrow helper":                     {"helper:verifyTrackingArrow"},
+		"async helper call":                      {"helper:expectCartEmptyAsync"},
+		"checkCondition":                         {},
+		"one-hop only ignores transitive helper": {},
+		"direct assertion and helper together":   {"helper:verifyCartEmpty", "expect"},
+		"nested helper inside main":              {"helper:nestedInsideMainHelper"},
+	}
+	for _, unit := range units {
+		exp, ok := expected[unit.Name]
+		if !ok {
+			t.Errorf("unexpected test unit: %q", unit.Name)
+			continue
+		}
+		if len(unit.Assertions) != len(exp) {
+			t.Errorf("test %q: expected assertions %v, got %v", unit.Name, exp, unit.Assertions)
+			continue
+		}
+		for i, a := range exp {
+			if unit.Assertions[i] != a {
+				t.Errorf("test %q: expected assertion[%d]=%q, got %q", unit.Name, i, a, unit.Assertions[i])
+			}
+		}
+	}
+}
+
+func TestR2_DartHelper_InsideGroupWithNamedParamsAndMultiLine(t *testing.T) {
+	source := []byte(`
+void main() {
+  group('tracking group', () {
+    void verifyTrackingBehavior({
+      required String expectedSource,
+      required String buttonFrom,
+    }) {
+      verify(() => repo.setVisitSource(source: expectedSource)).called(1);
+      verify(() => mixpanel.trackEvent(eventName: 'x', properties: any(named: 'properties'))).called(1);
+    }
+
+    testWidgets('tracks button click', (tester) async {
+      verifyTrackingBehavior(
+        expectedSource: 'home',
+        buttonFrom: 'submit_button',
+      );
+    });
+  });
+}
+`)
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "tracking_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) == 0 {
+		t.Errorf("expected helper:verifyTrackingBehavior assertion, got 0 assertions: %+v", units[0])
+	}
+}
+
+func TestBlocTest_SetUpEndingWithSemicolon_FullBodyExtracted(t *testing.T) {
+	source := []byte(`
+void main() {
+  blocTest<SearchBloc, SearchState>(
+    'search with failure A',
+    setUp: () {
+      when(() => repo.get()).thenAnswer((_) async => const Left(ApiFailure.other('e')));
+      when(() => repo.fallbackA()).thenReturn(1);
+    },
+    build: () => SearchBloc(repo),
+    act: (bloc) => bloc.add(const SearchEvent('a')),
+    expect: () => [SearchState.failureA()],
+  );
+
+  blocTest<SearchBloc, SearchState>(
+    'search with failure B',
+    setUp: () {
+      when(() => repo.get()).thenAnswer((_) async => const Left(ApiFailure.other('e')));
+      when(() => repo.fallbackB()).thenReturn(2);
+    },
+    build: () => SearchBloc(repo),
+    act: (bloc) => bloc.add(const SearchEvent('b')),
+    expect: () => [SearchState.failureB()],
+  );
+}
+`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "search_bloc_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error locating tests: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(units))
+	}
+
+	if units[0].RawBody == units[1].RawBody {
+		t.Fatalf("expected different RawBody for two blocTests with differing later setUp and expect, but got identical: %q", units[0].RawBody)
+	}
+	if !strings.Contains(units[0].RawBody, "fallbackA") {
+		t.Errorf("expected unit 0 RawBody to contain fallbackA, got %q", units[0].RawBody)
+	}
+	if !strings.Contains(units[1].RawBody, "fallbackB") {
+		t.Errorf("expected unit 1 RawBody to contain fallbackB, got %q", units[1].RawBody)
 	}
 }

@@ -233,3 +233,62 @@ func TestDiscoverScopeDuplicateRootsGeneratedCountedOnce(t *testing.T) {
 		t.Errorf("expected exactly one generated exclusion, got %+v", res.Excluded)
 	}
 }
+
+func TestDiscoverScope_LinkedWorktreeAndDefaultDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// root/a_test.go
+	_ = os.WriteFile(filepath.Join(tmpDir, "a_test.go"), []byte("package test\nfunc TestA(t *testing.T){}\n"), 0644)
+
+	// root/wt/.git (file: gitdir: /x/.git/worktrees/wt)
+	wtDir := filepath.Join(tmpDir, "wt")
+	_ = os.MkdirAll(wtDir, 0755)
+	_ = os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: /x/.git/worktrees/wt\n"), 0644)
+	_ = os.WriteFile(filepath.Join(wtDir, "b_test.go"), []byte("package test\nfunc TestB(t *testing.T){}\n"), 0644)
+
+	// root/vendor/c_test.go
+	vendorDir := filepath.Join(tmpDir, "vendor")
+	_ = os.MkdirAll(vendorDir, 0755)
+	_ = os.WriteFile(filepath.Join(vendorDir, "c_test.go"), []byte("package test\nfunc TestC(t *testing.T){}\n"), 0644)
+
+	// root/third_party/d/e.test.ts
+	tpDir := filepath.Join(tmpDir, "third_party", "d")
+	_ = os.MkdirAll(tpDir, 0755)
+	_ = os.WriteFile(filepath.Join(tpDir, "e.test.ts"), []byte("it('e', () => { expect(1).toBe(1); });\n"), 0644)
+
+	adapter := dart.NewAdapter()
+
+	// 1. Scanning root: only a_test.go is a candidate
+	res := engine.DiscoverScope([]string{tmpDir}, adapter, nil)
+	if len(res.CandidateFiles) != 1 || filepath.Base(res.CandidateFiles[0]) != "a_test.go" {
+		t.Fatalf("expected candidate files to contain only a_test.go, got %+v", res.CandidateFiles)
+	}
+
+	var hasLinkedWorktree, hasVendor, hasThirdParty bool
+	for _, ex := range res.Excluded {
+		if ex.Reason == "linked_worktree" && filepath.Base(ex.Path) == "wt" {
+			hasLinkedWorktree = true
+		}
+		if ex.Reason == "default_directory" && filepath.Base(ex.Path) == "vendor" {
+			hasVendor = true
+		}
+		if ex.Reason == "default_directory" && filepath.Base(ex.Path) == "third_party" {
+			hasThirdParty = true
+		}
+	}
+	if !hasLinkedWorktree {
+		t.Errorf("expected linked_worktree exclusion for wt, got exclusions: %+v", res.Excluded)
+	}
+	if !hasVendor {
+		t.Errorf("expected default_directory exclusion for vendor, got exclusions: %+v", res.Excluded)
+	}
+	if !hasThirdParty {
+		t.Errorf("expected default_directory exclusion for third_party, got exclusions: %+v", res.Excluded)
+	}
+
+	// 2. Scanning root/wt directly as the root still analyzes b_test.go
+	resWT := engine.DiscoverScope([]string{wtDir}, adapter, nil)
+	if len(resWT.CandidateFiles) != 1 || filepath.Base(resWT.CandidateFiles[0]) != "b_test.go" {
+		t.Fatalf("expected candidate files for direct wt scan to be b_test.go, got %+v", resWT.CandidateFiles)
+	}
+}

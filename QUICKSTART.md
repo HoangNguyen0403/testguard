@@ -104,7 +104,7 @@ testguard --allow-empty test/empty_module/
 
 If no test declarations are found and no errors or findings occurred, TestGuard exits with code `3` (`not_applicable / empty_allowed`). Exit `3` explicitly signifies that the check was inapplicable, rather than claiming tests passed.
 
-> ℹ️ **Configuration Note**: Checked-in `testguard.yaml` files are not applied (`config_applied: false`). TestGuard relies purely on automated zero-config discovery.
+> ℹ️ **Limiting Scope**: To limit scan scope, pass explicit paths, e.g. `testguard path/to/module`. Linked git worktrees and `vendor/` / `third_party/` directories are skipped automatically. Repository configuration files are not applied (`config_applied: false`). TestGuard relies purely on automated zero-config discovery.
 
 ### Flag Compatibility Rules
 - **`--json` with `-f azure` is Rejected**: Combining `--json` with `-f azure` is invalid usage and exits with code `2` (`invalid_usage`). Use `--json` with the default console reporter or explicit `-f json`.

@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	blocTestRegex       = regexp.MustCompile(`(?s)blocTest\s*(?:<[^>]+>)?\s*\(\s*['"]([^'"]+)['"]\s*,\s*(.*?)\);\s*(?:\n|$)`)
+	blocTestHeaderRegex = regexp.MustCompile(`(?s)\bblocTest\s*(?:<[^>]+>)?\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,`)
 	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
 	seedRegex           = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
 	actRegex            = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
@@ -50,6 +50,7 @@ func (a *Adapter) IsGenerated(filePath string, header []byte) bool {
 func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit, error) {
 	var units []parser.TestUnit
 	src := string(source)
+	assertingHelpers := findAssertingHelpers(src)
 	lineOffsets := []int{0}
 	for i := range len(src) {
 		if src[i] == '\n' {
@@ -72,10 +73,28 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	}
 
 	// 1. Locate blocTest invocations
-	blocMatches := blocTestRegex.FindAllStringSubmatchIndex(src, -1)
+	blocMatches := blocTestHeaderRegex.FindAllStringSubmatchIndex(src, -1)
 	for _, m := range blocMatches {
-		testName := src[m[2]:m[3]]
-		argsBody := src[m[4]:m[5]]
+		var testName string
+		if m[2] != -1 {
+			testName = src[m[2]:m[3]]
+		} else if m[4] != -1 {
+			testName = src[m[4]:m[5]]
+		}
+
+		// m[0] is the start of "blocTest". Find the opening paren of the call.
+		openParenRel := strings.Index(src[m[0]:], "(")
+		if openParenRel == -1 {
+			continue
+		}
+		openParen := m[0] + openParenRel
+		closeParen := parser.FindMatchingParen(src, openParen)
+		if closeParen == -1 {
+			continue
+		}
+
+		// argsBody is from after the comma following the test name (m[1]) up to closeParen
+		argsBody := strings.TrimSpace(src[m[1]:closeParen])
 
 		unit := parser.TestUnit{
 			Name:       testName,
@@ -124,9 +143,33 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		body := src[cbStart : closeBrace+1]
 
 		var assertions []string
-		assertMatches := assertionRegex.FindAllString(body, -1)
-		for _, a := range assertMatches {
-			assertions = append(assertions, strings.TrimSuffix(a, "("))
+		// Scan body for direct assertions and calls to asserting local helpers
+		for i := 0; i < len(body); {
+			next := skipCommentsAndStrings(body, i)
+			if next != i {
+				i = next
+				continue
+			}
+			if isIdentStart(body[i]) {
+				start := i
+				for i < len(body) && isIdentPart(body[i]) {
+					i++
+				}
+				ident := body[start:i]
+				after := skipWhitespaceAndComments(body, i)
+				if after < len(body) && body[after] == '(' {
+					if isDirectAssertion(ident) {
+						assertions = append(assertions, ident)
+					} else if assertingHelpers[ident] && ident != testName {
+						shadowRe := regexp.MustCompile(`(?:\b(?:var|final|const)\s+` + regexp.QuoteMeta(ident) + `\b|\b` + regexp.QuoteMeta(ident) + `\s*=)`)
+						if !shadowRe.MatchString(stripCommentsAndStrings(body)) {
+							assertions = append(assertions, "helper:"+ident)
+						}
+					}
+				}
+				continue
+			}
+			i++
 		}
 
 		unit := parser.TestUnit{
@@ -143,4 +186,521 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	}
 
 	return units, nil
+}
+
+var forbiddenHelpers = map[string]bool{
+	"if":            true,
+	"for":           true,
+	"while":         true,
+	"switch":        true,
+	"catch":         true,
+	"else":          true,
+	"return":        true,
+	"case":          true,
+	"default":       true,
+	"break":         true,
+	"continue":      true,
+	"do":            true,
+	"try":           true,
+	"finally":       true,
+	"throw":         true,
+	"rethrow":       true,
+	"assert":        true,
+	"new":           true,
+	"const":         true,
+	"var":           true,
+	"final":         true,
+	"late":          true,
+	"class":         true,
+	"mixin":         true,
+	"extension":     true,
+	"enum":          true,
+	"typedef":       true,
+	"import":        true,
+	"export":        true,
+	"part":          true,
+	"library":       true,
+	"with":          true,
+	"on":            true,
+	"as":            true,
+	"is":            true,
+	"in":            true,
+	"main":          true,
+	"test":          true,
+	"testWidgets":   true,
+	"blocTest":      true,
+	"group":         true,
+	"setUp":         true,
+	"setUpAll":      true,
+	"tearDown":      true,
+	"tearDownAll":   true,
+	"expect":        true,
+	"expectLater":   true,
+	"verify":        true,
+	"verifyNever":   true,
+	"verifyInOrder": true,
+}
+
+func isDirectAssertion(name string) bool {
+	switch name {
+	case "expect", "expectLater", "verify", "verifyNever", "verifyInOrder":
+		return true
+	default:
+		return false
+	}
+}
+
+func isValidHelperName(name string) bool {
+	return name != "" && !forbiddenHelpers[name]
+}
+
+func isIdentStart(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$'
+}
+
+func isIdentPart(c byte) bool {
+	return isIdentStart(c) || (c >= '0' && c <= '9')
+}
+
+func skipCommentsAndStrings(src string, i int) int {
+	n := len(src)
+	for i < n {
+		if i+1 < n && src[i] == '/' && src[i+1] == '/' {
+			i += 2
+			for i < n && src[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < n && src[i] == '/' && src[i+1] == '*' {
+			i += 2
+			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
+				i++
+			}
+			i += 2
+			continue
+		}
+		if (src[i] == 'r' || src[i] == 'R') && i+1 < n && (src[i+1] == '\'' || src[i+1] == '"') {
+			quote := src[i+1]
+			if i+3 < n && src[i+2] == quote && src[i+3] == quote {
+				i += 4
+				for i+2 < n && !(src[i] == quote && src[i+1] == quote && src[i+2] == quote) {
+					i++
+				}
+				i += 3
+				continue
+			}
+			i += 2
+			for i < n && src[i] != quote && src[i] != '\n' {
+				i++
+			}
+			if i < n && src[i] == quote {
+				i++
+			}
+			continue
+		}
+		if (src[i] == '\'' || src[i] == '"') && i+2 < n && src[i+1] == src[i] && src[i+2] == src[i] {
+			quote := src[i]
+			i += 3
+			for i+2 < n {
+				if src[i] == '\\' {
+					i += 2
+					continue
+				}
+				if src[i] == quote && src[i+1] == quote && src[i+2] == quote {
+					i += 3
+					break
+				}
+				i++
+			}
+			continue
+		}
+		if src[i] == '\'' || src[i] == '"' || src[i] == '`' {
+			quote := src[i]
+			i++
+			for i < n && src[i] != quote {
+				if src[i] == '\\' {
+					i++
+					if i < n {
+						i++
+						continue
+					}
+				} else if src[i] == '\n' && quote != '`' {
+					break
+				}
+				i++
+			}
+			if i < n && src[i] == quote {
+				i++
+			}
+			continue
+		}
+		break
+	}
+	return i
+}
+
+func skipWhitespaceAndComments(src string, i int) int {
+	n := len(src)
+	for i < n {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r' {
+			i++
+			continue
+		}
+		break
+	}
+	return i
+}
+
+func findMatchingParen(src string, openParen int) int {
+	if openParen < 0 || openParen >= len(src) || src[openParen] != '(' {
+		return -1
+	}
+	depth := 0
+	n := len(src)
+	for i := openParen; i < n; {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if src[i] == '(' {
+			depth++
+		} else if src[i] == ')' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+		i++
+	}
+	return -1
+}
+
+func findMatchingAngleBracket(src string, openAngle int) int {
+	if openAngle < 0 || openAngle >= len(src) || src[openAngle] != '<' {
+		return -1
+	}
+	depth := 0
+	n := len(src)
+	for i := openAngle; i < n; {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if src[i] == '<' {
+			depth++
+		} else if src[i] == '>' {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		} else if src[i] == ';' || src[i] == '{' || src[i] == '}' || src[i] == '(' || src[i] == ')' {
+			return -1
+		}
+		i++
+	}
+	return -1
+}
+
+func findSemicolon(src string, start int) int {
+	n := len(src)
+	for i := start; i < n; {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if src[i] == ';' {
+			return i
+		}
+		i++
+	}
+	return -1
+}
+
+func stripComments(code string) string {
+	var buf strings.Builder
+	n := len(code)
+	for i := 0; i < n; {
+		if i+1 < n && code[i] == '/' && code[i+1] == '/' {
+			i += 2
+			for i < n && code[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < n && code[i] == '/' && code[i+1] == '*' {
+			i += 2
+			for i+1 < n && !(code[i] == '*' && code[i+1] == '/') {
+				i++
+			}
+			i += 2
+			continue
+		}
+		if (code[i] == 'r' || code[i] == 'R') && i+1 < n && (code[i+1] == '\'' || code[i+1] == '"') {
+			quote := code[i+1]
+			if i+3 < n && code[i+2] == quote && code[i+3] == quote {
+				buf.WriteString(code[i : i+4])
+				i += 4
+				for i+2 < n && !(code[i] == quote && code[i+1] == quote && code[i+2] == quote) {
+					buf.WriteByte(code[i])
+					i++
+				}
+				if i+2 < n {
+					buf.WriteString(code[i : i+3])
+					i += 3
+				}
+				continue
+			}
+			buf.WriteString(code[i : i+2])
+			i += 2
+			for i < n && code[i] != quote && code[i] != '\n' {
+				buf.WriteByte(code[i])
+				i++
+			}
+			if i < n && code[i] == quote {
+				buf.WriteByte(code[i])
+				i++
+			}
+			continue
+		}
+		if (code[i] == '\'' || code[i] == '"') && i+2 < n && code[i+1] == code[i] && code[i+2] == code[i] {
+			quote := code[i]
+			buf.WriteString(code[i : i+3])
+			i += 3
+			for i+2 < n {
+				if code[i] == '\\' {
+					buf.WriteByte(code[i])
+					if i+1 < n {
+						buf.WriteByte(code[i+1])
+						i += 2
+						continue
+					}
+				}
+				if code[i] == quote && code[i+1] == quote && code[i+2] == quote {
+					buf.WriteString(code[i : i+3])
+					i += 3
+					break
+				}
+				buf.WriteByte(code[i])
+				i++
+			}
+			continue
+		}
+		if code[i] == '\'' || code[i] == '"' || code[i] == '`' {
+			quote := code[i]
+			buf.WriteByte(quote)
+			i++
+			for i < n && code[i] != quote {
+				if code[i] == '\\' {
+					buf.WriteByte(code[i])
+					if i+1 < n {
+						buf.WriteByte(code[i+1])
+						i += 2
+						continue
+					}
+				} else if code[i] == '\n' && quote != '`' {
+					break
+				}
+				buf.WriteByte(code[i])
+				i++
+			}
+			if i < n && code[i] == quote {
+				buf.WriteByte(quote)
+				i++
+			}
+			continue
+		}
+		buf.WriteByte(code[i])
+		i++
+	}
+	return buf.String()
+}
+
+func stripCommentsAndStrings(code string) string {
+	b := []byte(stripComments(code))
+	n := len(b)
+	for i := 0; i < n; {
+		if b[i] == '\'' || b[i] == '"' {
+			quote := b[i]
+			b[i] = ' '
+			i++
+			for i < n {
+				if b[i] == '\\' {
+					b[i] = ' '
+					if i+1 < n && b[i+1] != '\n' && b[i+1] != '\r' {
+						b[i+1] = ' '
+					}
+					i += 2
+					continue
+				}
+				if b[i] == quote {
+					b[i] = ' '
+					i++
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return string(b)
+}
+
+func findAssertingHelpers(src string) map[string]bool {
+	assertingHelpers := make(map[string]bool)
+	n := len(src)
+	if n == 0 {
+		return assertingHelpers
+	}
+
+	closing := make([]int, n)
+	for idx := range closing {
+		closing[idx] = -1
+	}
+	var parenStack []int
+	var braceStack []int
+	for i := 0; i < n; {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		switch src[i] {
+		case '(':
+			parenStack = append(parenStack, i)
+		case ')':
+			if len(parenStack) > 0 {
+				open := parenStack[len(parenStack)-1]
+				parenStack = parenStack[:len(parenStack)-1]
+				closing[open] = i
+			}
+		case '{':
+			braceStack = append(braceStack, i)
+		case '}':
+			if len(braceStack) > 0 {
+				open := braceStack[len(braceStack)-1]
+				braceStack = braceStack[:len(braceStack)-1]
+				closing[open] = i
+			}
+		}
+		i++
+	}
+
+	var scanRange func(start, end int)
+	scanRange = func(start, end int) {
+		for i := start; i < end; {
+			next := skipCommentsAndStrings(src, i)
+			if next != i {
+				i = next
+				continue
+			}
+
+			if src[i] == '{' {
+				closeBrace := closing[i]
+				if closeBrace != -1 && closeBrace < end {
+					i = closeBrace + 1
+					continue
+				}
+				i++
+				continue
+			}
+
+			if src[i] == '(' {
+				parenClose := closing[i]
+				if parenClose != -1 && parenClose < end {
+					k := skipWhitespaceAndComments(src, parenClose+1)
+					if strings.HasPrefix(src[k:], "async*") {
+						k = skipWhitespaceAndComments(src, k+6)
+					} else if strings.HasPrefix(src[k:], "async") && (k+5 >= n || !isIdentPart(src[k+5])) {
+						k = skipWhitespaceAndComments(src, k+5)
+					} else if strings.HasPrefix(src[k:], "sync*") {
+						k = skipWhitespaceAndComments(src, k+5)
+					}
+					if k < end && src[k] == '{' {
+						openBrace := k
+						closeBrace := closing[openBrace]
+						if closeBrace != -1 && closeBrace < end {
+							scanRange(openBrace+1, closeBrace)
+							i = closeBrace + 1
+							continue
+						}
+					}
+				}
+			}
+
+			if isIdentStart(src[i]) {
+				identStart := i
+				for i < end && isIdentPart(src[i]) {
+					i++
+				}
+				name := src[identStart:i]
+
+				j := skipWhitespaceAndComments(src, i)
+				if j < end && src[j] == '<' {
+					if k := findMatchingAngleBracket(src, j); k != -1 && k < end {
+						j = skipWhitespaceAndComments(src, k+1)
+					}
+				}
+				if j < end && src[j] == '(' {
+					parenClose := closing[j]
+					if parenClose != -1 && parenClose < end {
+						k := skipWhitespaceAndComments(src, parenClose+1)
+						if strings.HasPrefix(src[k:], "async*") {
+							k = skipWhitespaceAndComments(src, k+6)
+						} else if strings.HasPrefix(src[k:], "async") && (k+5 >= n || !isIdentPart(src[k+5])) {
+							k = skipWhitespaceAndComments(src, k+5)
+						} else if strings.HasPrefix(src[k:], "sync*") {
+							k = skipWhitespaceAndComments(src, k+5)
+						}
+
+						if k < end && src[k] == '{' {
+							openBrace := k
+							closeBrace := closing[openBrace]
+							if closeBrace != -1 && closeBrace < end {
+								body := src[openBrace : closeBrace+1]
+								if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
+									assertingHelpers[name] = true
+								}
+								scanRange(openBrace+1, closeBrace)
+								i = closeBrace + 1
+								continue
+							}
+						} else if k+1 < end && src[k] == '=' && src[k+1] == '>' {
+							arrowStart := k + 2
+							semiIdx := findSemicolon(src, arrowStart)
+							if semiIdx != -1 && semiIdx < end {
+								body := src[arrowStart:semiIdx]
+								if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
+									assertingHelpers[name] = true
+								}
+								i = semiIdx + 1
+								continue
+							}
+						} else {
+							scanRange(j+1, parenClose)
+							i = parenClose + 1
+							continue
+						}
+					}
+				}
+				continue
+			}
+			i++
+		}
+	}
+
+	scanRange(0, n)
+	return assertingHelpers
 }

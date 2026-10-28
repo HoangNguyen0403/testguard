@@ -387,44 +387,83 @@ func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 
 	for _, h := range hashes {
 		group := byHash[h]
-		if len(group) == 2 || len(group) == 3 {
-			// Clone between 2-3 tests
-			for i := 1; i < len(group); i++ {
-				isExact := isExactTokens(group[0].tokens, group[i].tokens)
+		if len(group) < 2 {
+			continue
+		}
 
-				var msg, suggestion string
-				if isExact {
-					msg = fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", group[i].unit.Name, group[0].unit.Name, group[0].unit.StartLine)
-					suggestion = "Consolidate identical duplicate tests or verify whether distinct inputs were intended."
-				} else {
-					msg = fmt.Sprintf("Similar test structure: '%s' shares normalized token structure with '%s' (line %d). Note: literal normalization indicates structural similarity, not proven semantic redundancy.", group[i].unit.Name, group[0].unit.Name, group[0].unit.StartLine)
-					suggestion = "Check whether this test exercises a distinct edge case or boundary condition before consolidating. Do not treat syntactic clone similarity as proof of semantic redundancy or delete cases."
+		// 1. Partition the group into exact-token subgroups.
+		var exactSubgroups [][]analyzedUnit
+		for _, u := range group {
+			found := false
+			for i := range exactSubgroups {
+				if isExactTokens(exactSubgroups[i][0].tokens, u.tokens) {
+					exactSubgroups[i] = append(exactSubgroups[i], u)
+					found = true
+					break
 				}
+			}
+			if !found {
+				exactSubgroups = append(exactSubgroups, []analyzedUnit{u})
+			}
+		}
 
-				violations = append(violations, models.Violation{
+		var groupViolations []models.Violation
+
+		// 2. For each exact subgroup of size >= 2, emit GUARD-UNIV-01 Duplicate test body for every member after the first.
+		for _, subgroup := range exactSubgroups {
+			if len(subgroup) >= 2 {
+				first := subgroup[0]
+				for j := 1; j < len(subgroup); j++ {
+					member := subgroup[j]
+					groupViolations = append(groupViolations, models.Violation{
+						RuleID:     "GUARD-UNIV-01",
+						Severity:   models.SeverityAdvisory,
+						FilePath:   member.unit.FilePath,
+						LineNumber: member.unit.StartLine,
+						Column:     1,
+						Message:    fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", member.unit.Name, first.unit.Name, first.unit.StartLine),
+						Suggestion: "Consolidate identical duplicate tests or verify whether distinct inputs were intended.",
+					})
+				}
+			}
+		}
+
+		// 3. Members of the normalized group that are NOT exact duplicates of anything.
+		// Count only distinct exact-variants: len(exactSubgroups).
+		numVariants := len(exactSubgroups)
+		firstUnit := group[0]
+		if numVariants >= 2 && numVariants <= 3 {
+			for i := 1; i < numVariants; i++ {
+				variantRep := exactSubgroups[i][0]
+				groupViolations = append(groupViolations, models.Violation{
 					RuleID:     "GUARD-UNIV-01",
 					Severity:   models.SeverityAdvisory,
-					FilePath:   group[i].unit.FilePath,
-					LineNumber: group[i].unit.StartLine,
+					FilePath:   variantRep.unit.FilePath,
+					LineNumber: variantRep.unit.StartLine,
 					Column:     1,
-					Message:    msg,
-					Suggestion: suggestion,
+					Message:    fmt.Sprintf("Similar test structure: '%s' shares normalized token structure with '%s' (line %d). Note: literal normalization indicates structural similarity, not proven semantic redundancy.", variantRep.unit.Name, firstUnit.unit.Name, firstUnit.unit.StartLine),
+					Suggestion: "Check whether this test exercises a distinct edge case or boundary condition before consolidating. Do not treat syntactic clone similarity as proof of semantic redundancy or delete cases.",
 				})
 			}
-		} else if len(group) >= 4 {
-			// Structural repetition smell (>=4 tests)
-			for i := 3; i < len(group); i++ {
-				violations = append(violations, models.Violation{
+		} else if numVariants >= 4 {
+			for i := 3; i < numVariants; i++ {
+				variantRep := exactSubgroups[i][0]
+				groupViolations = append(groupViolations, models.Violation{
 					RuleID:     "GUARD-UNIV-02",
 					Severity:   models.SeverityAdvisory,
-					FilePath:   group[i].unit.FilePath,
-					LineNumber: group[i].unit.StartLine,
+					FilePath:   variantRep.unit.FilePath,
+					LineNumber: variantRep.unit.StartLine,
 					Column:     1,
-					Message:    fmt.Sprintf("Structural repetition: '%s' shares normalized token structure with %d other tests in this file (first seen at '%s', line %d). Note: structural similarity does not prove semantic redundancy.", group[i].unit.Name, len(group)-1, group[0].unit.Name, group[0].unit.StartLine),
+					Message:    fmt.Sprintf("Structural repetition: '%s' shares normalized token structure with %d other tests in this file (first seen at '%s', line %d). Note: structural similarity does not prove semantic redundancy.", variantRep.unit.Name, len(group)-1, firstUnit.unit.Name, firstUnit.unit.StartLine),
 					Suggestion: "Consolidate repetitive test structures into a parameterized table-driven test loop without removing valid boundary conditions or distinct equivalence classes.",
 				})
 			}
 		}
+
+		sort.Slice(groupViolations, func(i, j int) bool {
+			return groupViolations[i].LineNumber < groupViolations[j].LineNumber
+		})
+		violations = append(violations, groupViolations...)
 	}
 
 	return violations
