@@ -168,10 +168,47 @@ approval: approved(user, 2026-10-28). Decisions:
 - After implementation, re-scan the same client snapshot and re-sample precision.
 
 ## Outcome Report
-{schema_version: 1, run_id: "brainstorm-testguard-rule-trust-2026-10-28", slug: "testguard-rule-trust", workflow: brainstorm-feature, feature_status: requirements_ready, started_at: "2026-10-28T04:00:00Z", completed_at: "2026-10-28T04:40:00Z", requirement_trace: {brd_objectives: ["OBJ-1 Blocker precision >=80% per rule x language", "OBJ-2 canonical scan scope"], requirements: ["REQ-SCOPE-01", "REQ-GO-ZERO-01", "REQ-HELPER-01", "REQ-DART-DEFAULTS-01", "REQ-REACT02-01", "REQ-CLONE-LABEL-01", "REQ-CORPUS-01", "REQ-CONFIG-01"], acceptance_criteria: ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7", "AC8"], srs: []}, completed_evidence: ["rule source review", "HEAD re-scan of same snapshot", "223 findings hand-classified across 6 scouts", "t.Run regression repro", "testguard.yaml has no reader"], missing_evidence: ["GO-03 HEAD precision", "precision of new candidate rules"], decision_needed: ["approve option A + B stopgap", "default-off vs Advisory for 0%-precision rules", "load testguard.yaml vs remove init"], recommended_next_workflow: plan-feature, cost: {source: unavailable}, agent: {identity: "omp orchestrator", model: "anthropic/claude-opus-5-5"}}
+{schema_version: 1, run_id: "brainstorm-testguard-rule-trust-2026-10-28", slug: "testguard-rule-trust", workflow: brainstorm-feature, feature_status: implemented_verified, started_at: "2026-10-28T04:00:00Z", completed_at: "2026-10-28T04:40:00Z", requirement_trace: {brd_objectives: ["OBJ-1 Blocker precision >=80% per rule x language", "OBJ-2 canonical scan scope"], requirements: ["REQ-SCOPE-01", "REQ-GO-ZERO-01", "REQ-HELPER-01", "REQ-DART-DEFAULTS-01", "REQ-REACT02-01", "REQ-CLONE-LABEL-01", "REQ-CORPUS-01", "REQ-CONFIG-01"], acceptance_criteria: ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6", "AC7", "AC8"], srs: []}, completed_evidence: ["rule source review", "HEAD re-scan of same snapshot", "223 findings hand-classified across 6 scouts", "t.Run regression repro", "testguard.yaml has no reader"], missing_evidence: ["GO-03 HEAD precision", "precision of new candidate rules"], decision_needed: ["approve option A + B stopgap", "default-off vs Advisory for 0%-precision rules", "load testguard.yaml vs remove init"], recommended_next_workflow: plan-feature, cost: {source: unavailable}, agent: {identity: "omp orchestrator", model: "anthropic/claude-opus-5-5"}}
+
+## Verification Results (same client snapshot, commit 7ed0d4f)
+
+Re-scan totals:
+- Blockers: 830 (v0.1.1 report) → 193.
+- Warnings: 167 → 63.
+- Advisories: 2679 → 1862.
+- Scope: 6433 files / 24 modules → 3879 files / 18 modules. Linked worktrees and `third_party/` are now skipped.
+
+Hand-labelled real findings, re-checked automatically against the new report:
+
+| Rule | Labelled true positives still reported | Labelled false positives still reported |
+|---|---|---|
+| GUARD-UNIV-ZERO | 22/22 | 0/93 |
+| GUARD-GO-03 | 8/8 | 0/58 |
+| GUARD-DART-BLOC-DUPLICATE | 3/3 | 0/9 |
+| GUARD-UNIV-TAUTOLOGY (new) | 11/11 | 0/0 |
+| GUARD-UNIV-SKIP (new) | 8/8 | 0/0 |
+| GUARD-E2E-01 (new) | 4/4 | 0/0 |
+| GUARD-REACT-02 (now Warning) | 19/22 | 4/11 |
+| GUARD-UNIV-02 | 18/19 | 2/9 |
+| GUARD-UNIV-01 | 7/7 | 19/22, of which 18 now carry the honest "Similar test structure" wording |
+| Deleted rules (UNCOVERED-MUTATION, DISGUISED-MIRROR, GO-02) | n/a | 0/58 |
+
+Spot precision on fresh samples of the post-change report:
+- UNIV-ZERO TS/TSX: 15/15 TP.
+- UNIV-TAUTOLOGY: 11/11.
+- REACT-02: 17 TP / 3 FP / 4 debatable.
+- E2E-01: 4 TP / 2 debatable.
+- UNIV-SKIP: 8 TP / 13 debatable (reason or ticket comment present).
+- UNIV-02: 11 TP / 1 FP / 7 debatable.
+
+Known limitations, accepted:
+- Split-file testify suites are not analyzed.
+- Cross-file helpers are not resolved, except gomock pairing and `t.Run` delegation.
+- REACT-02 is silenced for a whole file when the file enables fake timers anywhere (it lost one real 1.1 s sleep).
+- Hard waits inside Flutter integration "robot" helper files are not seen, because only test bodies are checked.
 
 ## Open Questions
-None blocking. GO-03 precision at HEAD is re-measured in the verification scan.
+None blocking.
 
 ## Next Workflow
 plan-feature

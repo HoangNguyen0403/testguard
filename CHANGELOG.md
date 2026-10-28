@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Dart**: One-hop same-file helper resolution appending `helper:<name>` assertions; string/comment-aware paren matching for `blocTest` argument bodies preventing mid-setUp truncation.
 - **Rule Refinements & Severity Adjustments**:
   - `GUARD-REACT-02`: Severity changed to Warning. Excludes delay `0` flushes, mock latency callbacks (`mockImplementation`), class bodies, and files using `useFakeTimers()`. Only evaluates non-E2E unit tests.
-  - `GUARD-DART-BLOC-DUPLICATE`: Compares entire `blocTest` scenario arguments (build/setUp/seed/act/expect/skip/verify) after stripping comments and whitespace instead of comparing only act and expect blocks.
-  - `GUARD-UNIV-01` / `GUARD-UNIV-02`: Exact-token duplicates consistently report as `GUARD-UNIV-01` ("Duplicate test body"), while normalized-literal variants report as `GUARD-UNIV-02` ("Similar test structure").
+  - `GUARD-DART-BLOC-DUPLICATE`: Compares the entire `blocTest` scenario (build/setUp/seed/act/expect/skip/verify) as an exact, string-preserving token stream with comments dropped, instead of only the act and expect blocks.
+  - `GUARD-UNIV-01` / `GUARD-UNIV-02`: Exact-token duplicates always report as `GUARD-UNIV-01` "Duplicate test body", whatever the group size. Literal-only variants report as `GUARD-UNIV-01` "Similar test structure" when there are 2–3 distinct variants, and as `GUARD-UNIV-02` "Structural repetition" when there are ≥4.
+  - `GUARD-GO-03`: A table is now only a composite literal bound to an identifier that is ranged over with a testing `t.Run` (including nested testing closures and suite `Run`). Rows are compared ignoring `name`/`desc`/`description`/`title` fields, and tables whose loop branches on the name field are skipped. Mock fixtures, expected-output slices and dedup inputs are no longer treated as tables.
 
 ### Added
 - **Hygiene & E2E Rules**:
