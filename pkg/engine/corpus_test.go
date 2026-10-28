@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -354,13 +355,21 @@ func TestPrecisionCorpus(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Special fixture setup: synthesize untracked .git files for linked-worktree test
+			if tc.dir == "testdata/corpus/scope_exclusions" {
+				wtGit := filepath.Join(tc.dir, "wt", ".git")
+				if _, err := os.Stat(wtGit); os.IsNotExist(err) {
+					_ = os.WriteFile(wtGit, []byte("gitdir: /x/.git/worktrees/wt\n"), 0644)
+					defer os.Remove(wtGit)
+				}
+			}
+
 			res, err := eng.Run(engine.Options{
 				TargetPaths: []string{tc.dir},
 			})
 			if err != nil {
 				t.Fatalf("unexpected error running engine on %s: %v", tc.dir, err)
 			}
-
 			// Check negative files first
 			for _, negFile := range tc.negativeFiles {
 				for _, f := range res.Report.Findings {
