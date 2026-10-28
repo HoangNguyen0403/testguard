@@ -214,3 +214,110 @@ void main() {
 		t.Errorf("expected error message mentioning unmatched brace, got %v", err)
 	}
 }
+
+func TestLocateUnitTestUnits_HelperAssertions(t *testing.T) {
+	source := []byte(`
+void verifyCartEmpty(tester) {
+  expect(find.byType(Cart), findsNothing);
+}
+
+void setupCart(tester) {
+  print('setting up cart');
+}
+
+void verifyTrackingArrow(String id) => expect(id, isNotEmpty);
+
+Future<void> expectCartEmptyAsync(tester) async {
+  await expectLater(tester, findsNothing);
+}
+void transitivelyCallsHelper(tester) {
+  verifyCartEmpty(tester);
+}
+
+void main() {
+  void nestedInsideMainHelper(tester) {
+    verify(mock.call());
+  }
+
+  testWidgets('cart is empty', (tester) async {
+    verifyCartEmpty(tester);
+  });
+
+  testWidgets('cart setup only', (tester) async {
+    setupCart(tester);
+  });
+
+  test('resolves helper defined later', () {
+    verifyTrackingLater('checkout_step');
+  });
+
+  test('calls arrow helper', () {
+    verifyTrackingArrow('123');
+  });
+
+  testWidgets('async helper call', (tester) async {
+    await expectCartEmptyAsync(tester);
+  });
+
+  test('checkCondition', () {
+    if (true) {
+      print('hello');
+    }
+  });
+
+  testWidgets('one-hop only ignores transitive helper', (tester) async {
+    transitivelyCallsHelper(tester);
+  });
+
+  testWidgets('direct assertion and helper together', (tester) async {
+    verifyCartEmpty(tester);
+    expect(true, isTrue);
+  });
+
+  testWidgets('nested helper inside main', (tester) async {
+    nestedInsideMainHelper(tester);
+  });
+}
+
+void verifyTrackingLater(String step) {
+  expect(step, isNotEmpty);
+}
+`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "helpers_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 9 {
+		t.Fatalf("expected 9 test units, got %d", len(units))
+	}
+
+	expected := map[string][]string{
+		"cart is empty":                           {"helper:verifyCartEmpty"},
+		"cart setup only":                         {},
+		"resolves helper defined later":           {"helper:verifyTrackingLater"},
+		"calls arrow helper":                      {"helper:verifyTrackingArrow"},
+		"async helper call":                       {"helper:expectCartEmptyAsync"},
+		"checkCondition":                          {},
+		"one-hop only ignores transitive helper":  {},
+		"direct assertion and helper together":    {"helper:verifyCartEmpty", "expect"},
+		"nested helper inside main":               {"helper:nestedInsideMainHelper"},
+	}
+	for _, unit := range units {
+		exp, ok := expected[unit.Name]
+		if !ok {
+			t.Errorf("unexpected test unit: %q", unit.Name)
+			continue
+		}
+		if len(unit.Assertions) != len(exp) {
+			t.Errorf("test %q: expected assertions %v, got %v", unit.Name, exp, unit.Assertions)
+			continue
+		}
+		for i, a := range exp {
+			if unit.Assertions[i] != a {
+				t.Errorf("test %q: expected assertion[%d]=%q, got %q", unit.Name, i, a, unit.Assertions[i])
+			}
+		}
+	}
+}
