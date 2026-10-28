@@ -1,6 +1,7 @@
 package clone_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -215,7 +216,7 @@ func TestDetectStructuralRepetition(t *testing.T) {
 			Name:      "repetition_case",
 			FilePath:  "pricing_test.go",
 			StartLine: i * 10,
-			RawBody:   "var input = 100; result := Calc(input); assert.Equal(t, 100, result);",
+			RawBody:   fmt.Sprintf("var input = %d; result := Calc(input); assert.Equal(t, %d, result);", i*100, i*100),
 		})
 	}
 
@@ -434,5 +435,107 @@ func TestDetectExactClones_StructurallyDifferentControl(t *testing.T) {
 
 	if len(violations) != 0 {
 		t.Errorf("structurally different bodies must not be reported as clones, got %d (%+v)", len(violations), violations)
+	}
+}
+
+func TestCloneRouting_FiveByteIdenticalBodies(t *testing.T) {
+	var tests []parser.TestUnit
+	for i := 1; i <= 5; i++ {
+		tests = append(tests, parser.TestUnit{
+			Name:      fmt.Sprintf("test_%d", i),
+			FilePath:  "pricing_test.go",
+			StartLine: i * 10,
+			RawBody:   "renderHeader(); expect(logo);",
+		})
+	}
+
+	violations := clone.New().Check(tests)
+	duplicateCount := 0
+	repetitionCount := 0
+	for _, v := range violations {
+		if v.RuleID == "GUARD-UNIV-01" && strings.Contains(v.Message, "Duplicate test body") {
+			duplicateCount++
+		}
+		if v.RuleID == "GUARD-UNIV-02" {
+			repetitionCount++
+		}
+	}
+
+	if duplicateCount != 4 {
+		t.Errorf("expected 4 Duplicate test body violations, got %d", duplicateCount)
+	}
+	if repetitionCount != 0 {
+		t.Errorf("expected 0 UNIV-02 repetition violations, got %d", repetitionCount)
+	}
+}
+
+func TestCloneRouting_FourBodiesDifferingOnlyInStringLiteral(t *testing.T) {
+	var tests []parser.TestUnit
+	titles := []string{"apple", "banana", "cherry", "date"}
+	for i, title := range titles {
+		tests = append(tests, parser.TestUnit{
+			Name:      fmt.Sprintf("test_%s", title),
+			FilePath:  "fruit_test.go",
+			StartLine: (i + 1) * 10,
+			RawBody:   fmt.Sprintf(`renderHeader("%s"); expect(logo);`, title),
+		})
+	}
+
+	violations := clone.New().Check(tests)
+	univ02Count := 0
+	for _, v := range violations {
+		if v.RuleID == "GUARD-UNIV-02" {
+			univ02Count++
+			if v.LineNumber != 40 {
+				t.Errorf("expected UNIV-02 on 4th test (line 40), got line %d", v.LineNumber)
+			}
+		}
+	}
+
+	if univ02Count != 1 {
+		t.Errorf("expected 1 UNIV-02 violation on the 4th, got %d", univ02Count)
+	}
+}
+
+func TestCloneRouting_TwoIdenticalPlusOneLiteralVariant(t *testing.T) {
+	tests := []parser.TestUnit{
+		{
+			Name:      "test_a",
+			FilePath:  "auth_test.go",
+			StartLine: 10,
+			RawBody:   `res := Login("admin", "secret"); assert.True(t, res);`,
+		},
+		{
+			Name:      "test_b",
+			FilePath:  "auth_test.go",
+			StartLine: 20,
+			RawBody:   `res := Login("admin", "secret"); assert.True(t, res);`,
+		},
+		{
+			Name:      "test_c",
+			FilePath:  "auth_test.go",
+			StartLine: 30,
+			RawBody:   `res := Login("guest", "secret"); assert.True(t, res);`,
+		},
+	}
+
+	violations := clone.New().Check(tests)
+	duplicateCount := 0
+	similarCount := 0
+	for _, v := range violations {
+		if v.RuleID == "GUARD-UNIV-01" {
+			if strings.Contains(v.Message, "Duplicate test body") {
+				duplicateCount++
+			} else if strings.Contains(v.Message, "Similar test structure") {
+				similarCount++
+			}
+		}
+	}
+
+	if duplicateCount != 1 {
+		t.Errorf("expected 1 Duplicate test body violation, got %d", duplicateCount)
+	}
+	if similarCount != 1 {
+		t.Errorf("expected 1 Similar test structure violation, got %d", similarCount)
 	}
 }
