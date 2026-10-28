@@ -71,6 +71,7 @@ func newKnownImportLocalNames() map[string]string {
 	names["github.com/stretchr/testify/assert"] = "assert"
 	names["github.com/stretchr/testify/require"] = "require"
 	names["github.com/matryer/is"] = "is"
+	names["github.com/stretchr/testify/suite"] = "suite"
 	return names
 }
 
@@ -170,6 +171,56 @@ func isPointerToTestingType(expr ast.Expr, ctx importContext, typeName string) b
 		return ctx.testingName != "" && ident.Name == ctx.testingName
 	case *ast.Ident:
 		return ctx.dotTesting && inner.Name == typeName
+	}
+	return false
+}
+
+// isTestingType checks if expr matches *<testingPkg>.<typeName> or <testingPkg>.<typeName>
+// for any typeName in typeNames.
+func isTestingType(expr ast.Expr, ctx importContext, typeNames ...string) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		switch inner := star.X.(type) {
+		case *ast.SelectorExpr:
+			ident, ok := inner.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			for _, typeName := range typeNames {
+				if inner.Sel.Name == typeName {
+					return ctx.testingName != "" && ident.Name == ctx.testingName
+				}
+			}
+		case *ast.Ident:
+			if ctx.dotTesting {
+				for _, typeName := range typeNames {
+					if inner.Name == typeName {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	switch inner := expr.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := inner.X.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		for _, typeName := range typeNames {
+			if inner.Sel.Name == typeName {
+				return ctx.testingName != "" && ident.Name == ctx.testingName
+			}
+		}
+	case *ast.Ident:
+		if ctx.dotTesting {
+			for _, typeName := range typeNames {
+				if inner.Name == typeName {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
@@ -295,39 +346,97 @@ func isAssertionImportPath(path string) bool {
 // their lexical declaration object (ast.Ident.Obj), so the same spelling in a
 // disjoint scope never inherits an assertion origin. Helper-mediated and
 // dynamically resolved assertion receivers are outside this static boundary.
-func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileImports map[string]string) []string {
+func findExecutableAssertions(
+	fn *ast.FuncDecl,
+	testingParams []*ast.Object,
+	recvParam *ast.Object,
+	imports importContext,
+	assertingHelpers map[string]bool,
+) []string {
 	if fn.Body == nil {
 		return nil
 	}
 
-	// First pass: receivers established by an assertion constructor.
+	testingParamSet := make(map[*ast.Object]bool)
+	for _, p := range testingParams {
+		if p != nil {
+			testingParamSet[p] = true
+		}
+	}
+
+	// First pass:
+	// - Collect testing parameters in *ast.FuncLit (t.Run closures)
+	// - Detect assertion constructors (assert.New, s.Require, s.Assert)
+	// - Detect s.T() assignments
+	// - Detect gomock.NewController
 	assertionReceivers := make(map[*ast.Object]bool)
+	hasGomockController := false
+
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-			return true
-		}
-		lhs, ok := assign.Lhs[0].(*ast.Ident)
-		if !ok || lhs.Obj == nil {
-			return true
-		}
-		ctor, ok := assign.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := ctor.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "New" {
-			return true
-		}
-		pkgIdent, ok := sel.X.(*ast.Ident)
-		if !ok || pkgIdent.Obj != nil {
-			return true
-		}
-		if isAssertionImportPath(fileImports[pkgIdent.Name]) {
-			assertionReceivers[lhs.Obj] = true
+		switch node := n.(type) {
+		case *ast.FuncLit:
+			if node.Type != nil && node.Type.Params != nil {
+				expr, paramObj, ok := singleParameterType(node.Type.Params)
+				if ok && paramObj != nil && isTestingType(expr, imports, "T", "TB") {
+					testingParamSet[paramObj] = true
+				}
+			}
+		case *ast.AssignStmt:
+			if len(node.Lhs) != 1 || len(node.Rhs) != 1 {
+				return true
+			}
+			lhs, ok := node.Lhs[0].(*ast.Ident)
+			if !ok || lhs.Obj == nil {
+				return true
+			}
+			ctor, ok := node.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := ctor.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "New" {
+				pkgIdent, ok := sel.X.(*ast.Ident)
+				if ok && pkgIdent.Obj == nil && isAssertionImportPath(imports.localNames[pkgIdent.Name]) {
+					assertionReceivers[lhs.Obj] = true
+				}
+			} else if recvParam != nil && (sel.Sel.Name == "Require" || sel.Sel.Name == "Assert") {
+				ident, ok := sel.X.(*ast.Ident)
+				if ok && ident.Obj == recvParam {
+					assertionReceivers[lhs.Obj] = true
+				}
+			} else if recvParam != nil && sel.Sel.Name == "T" {
+				ident, ok := sel.X.(*ast.Ident)
+				if ok && ident.Obj == recvParam {
+					testingParamSet[lhs.Obj] = true
+				}
+			}
+		case *ast.CallExpr:
+			sel, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "NewController" {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || pkgIdent.Obj != nil {
+				return true
+			}
+			imp := imports.localNames[pkgIdent.Name]
+			if imp == "github.com/golang/mock/gomock" || imp == "go.uber.org/mock/gomock" {
+				hasGomockController = true
+			}
 		}
 		return true
 	})
+
+	hasSqlmockImport := false
+	for _, path := range imports.localNames {
+		if strings.Contains(path, "sqlmock") || strings.Contains(path, "pgxmock") {
+			hasSqlmockImport = true
+			break
+		}
+	}
 
 	var assertions []string
 	seen := make(map[string]bool)
@@ -343,19 +452,65 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		if !ok {
 			return true
 		}
+
+		// Helper calls: one-hop same-file helpers taking a testing parameter
+		if len(assertingHelpers) > 0 {
+			if ident, ok := call.Fun.(*ast.Ident); ok {
+				if assertingHelpers[ident.Name] {
+					add("helper:" + ident.Name)
+					return true
+				}
+			}
+		}
+
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
+		methodName := sel.Sel.Name
+
+		// gomock: <x>.EXPECT()
+		if hasGomockController && methodName == "EXPECT" {
+			add("verify:gomock")
+			return true
+		}
+
+		// sqlmock / pgxmock: <x>.ExpectationsWereMet()
+		if hasSqlmockImport && methodName == "ExpectationsWereMet" {
+			add("verify:sqlmock")
+			return true
+		}
+
+		// Chained calls on suite receiver: s.Require().Equal(...), s.Assert().NoError(...)
+		if recvParam != nil {
+			if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok {
+					if innerIdent, ok := innerSel.X.(*ast.Ident); ok && innerIdent.Obj == recvParam {
+						if innerSel.Sel.Name == "Require" || innerSel.Sel.Name == "Assert" {
+							if isCommonAssertionMethod(methodName) {
+								add(methodName)
+								return true
+							}
+						}
+						if innerSel.Sel.Name == "T" {
+							if strings.HasPrefix(methodName, "Error") || strings.HasPrefix(methodName, "Fatal") || strings.HasPrefix(methodName, "Fail") {
+								add(methodName)
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+
 		receiver, ok := sel.X.(*ast.Ident)
 		if !ok {
 			return true
 		}
-		methodName := sel.Sel.Name
 		receiverName := receiver.Name
 
-		// 1. Direct calls on the testing parameter (t.Fatal, test.Errorf, b.Fail).
-		if testingParam != nil && receiver.Obj == testingParam {
+		// 1. Direct calls on the testing parameter (t.Fatal, test.Errorf, b.Fail, inner t.Errorf).
+		if receiver.Obj != nil && testingParamSet[receiver.Obj] {
 			if strings.HasPrefix(methodName, "Error") || strings.HasPrefix(methodName, "Fatal") || strings.HasPrefix(methodName, "Fail") {
 				add(methodName)
 			}
@@ -363,10 +518,8 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		}
 
 		// 2. Calls on a known assertion package (assert.*, require.*, is.*).
-		// An identifier lexically bound in this file is not a package qualifier.
 		if receiver.Obj == nil {
-			if importPath, ok := fileImports[receiverName]; ok && isAssertionImportPath(importPath) {
-				// Constructors like assert.New(t) do NOT count as assertions.
+			if importPath, ok := imports.localNames[receiverName]; ok && isAssertionImportPath(importPath) {
 				if methodName != "New" {
 					add(receiverName + "." + methodName)
 				}
@@ -377,12 +530,162 @@ func findExecutableAssertions(fn *ast.FuncDecl, testingParam *ast.Object, fileIm
 		// 3. Calls on a constructor-established assertion receiver.
 		if receiver.Obj != nil && assertionReceivers[receiver.Obj] && isCommonAssertionMethod(methodName) {
 			add(methodName)
+			return true
+		}
+
+		// 4. Calls on suite receiver: s.Equal(...)
+		if receiver.Obj != nil && recvParam != nil && receiver.Obj == recvParam && isCommonAssertionMethod(methodName) {
+			add(methodName)
+			return true
 		}
 
 		return true
 	})
 
 	return assertions
+}
+
+func hasSuiteRunCall(body *ast.BlockStmt, ctx importContext) bool {
+	if body == nil {
+		return false
+	}
+	hasRun := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Run" {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Obj != nil {
+			return true
+		}
+		if ctx.localNames[pkgIdent.Name] == "github.com/stretchr/testify/suite" {
+			hasRun = true
+			return false
+		}
+		return true
+	})
+	return hasRun
+}
+
+func classifySuiteMethod(fn *ast.FuncDecl) (string, *ast.Object, bool) {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Name == nil || fn.Body == nil {
+		return "", nil, false
+	}
+	if fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 {
+		return "", nil, false
+	}
+	if fn.Type.Params != nil && len(fn.Type.Params.List) > 0 {
+		return "", nil, false
+	}
+	if fn.Type.Results != nil && len(fn.Type.Results.List) > 0 {
+		return "", nil, false
+	}
+	if !isValidTestName(fn.Name.Name, "Test") {
+		return "", nil, false
+	}
+
+	field := fn.Recv.List[0]
+	var recvTypeName string
+	switch t := field.Type.(type) {
+	case *ast.StarExpr:
+		if id, ok := t.X.(*ast.Ident); ok {
+			recvTypeName = id.Name
+		}
+	case *ast.Ident:
+		recvTypeName = t.Name
+	}
+	if recvTypeName == "" {
+		return "", nil, false
+	}
+
+	var recvParam *ast.Object
+	if len(field.Names) > 0 {
+		recvParam = field.Names[0].Obj
+	}
+
+	return recvTypeName, recvParam, true
+}
+
+func collectAssertingHelpers(fileAST *ast.File, ctx importContext) map[string]bool {
+	helpers := make(map[string]bool)
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Body == nil || fn.Name == nil {
+			continue
+		}
+		if _, isTest := classifyGoTestFunc(fn, ctx); isTest {
+			continue
+		}
+		if fn.Type.Params == nil {
+			continue
+		}
+		var testingParams []*ast.Object
+		for _, field := range fn.Type.Params.List {
+			if isTestingType(field.Type, ctx, "T", "TB") {
+				for _, nameIdent := range field.Names {
+					if nameIdent.Obj != nil {
+						testingParams = append(testingParams, nameIdent.Obj)
+					}
+				}
+			}
+		}
+		if len(testingParams) == 0 {
+			continue
+		}
+		// Helpers calling helpers are not followed (pass nil for assertingHelpers).
+		assertions := findExecutableAssertions(fn, testingParams, nil, ctx, nil)
+		if len(assertions) > 0 {
+			helpers[fn.Name.Name] = true
+		}
+	}
+	return helpers
+}
+
+func buildTestUnit(
+	fn *ast.FuncDecl,
+	fset *token.FileSet,
+	source []byte,
+	srcLen int,
+	filePath string,
+	kind string,
+	name string,
+	assertions []string,
+	fileImports map[string]string,
+) parser.TestUnit {
+	declStart := fset.Position(fn.Pos())
+	declEnd := fset.Position(fn.End())
+
+	bodyStartOff := fset.Position(fn.Body.Pos()).Offset
+	bodyEndOff := fset.Position(fn.Body.End()).Offset
+	if bodyStartOff < 0 {
+		bodyStartOff = 0
+	}
+	if bodyEndOff > srcLen {
+		bodyEndOff = srcLen
+	}
+
+	rawBody := ""
+	if bodyStartOff < bodyEndOff {
+		rawBody = string(source[bodyStartOff:bodyEndOff])
+	}
+
+	return parser.TestUnit{
+		Name:        name,
+		FilePath:    filePath,
+		StartLine:   declStart.Line,
+		EndLine:     declEnd.Line,
+		Kind:        kind,
+		RawBody:     rawBody,
+		Assertions:  assertions,
+		ASTDecl:     fn,
+		FileSet:     fset,
+		FileImports: fileImports,
+	}
 }
 
 // LocateTests parses Go source using go/parser and extracts genuine executable test declarations.
@@ -395,6 +698,15 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 
 	imports := resolveImports(fileAST)
 	examples := runnableExamples(fileAST)
+	assertingHelpers := collectAssertingHelpers(fileAST, imports)
+
+	hasSuiteImport := false
+	for _, path := range imports.localNames {
+		if path == "github.com/stretchr/testify/suite" {
+			hasSuiteImport = true
+			break
+		}
+	}
 
 	var units []parser.TestUnit
 	srcLen := len(source)
@@ -404,47 +716,43 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		if !ok {
 			continue
 		}
-		signature, isTest := classifyGoTestFunc(fn, imports)
-		if !isTest {
+
+		// Top-level test / benchmark / fuzz / example
+		if fn.Recv == nil {
+			signature, isTest := classifyGoTestFunc(fn, imports)
+			if !isTest {
+				continue
+			}
+			// Compile-only examples without an output comment are not executed.
+			if signature.Kind == "example" && !examples[fn.Name.Name] {
+				continue
+			}
+
+			kind := signature.Kind
+			if kind == "unit" && hasSuiteRunCall(fn.Body, imports) {
+				kind = "suite_runner"
+			}
+
+			var testParams []*ast.Object
+			if signature.Param != nil {
+				testParams = append(testParams, signature.Param)
+			}
+
+			assertions := findExecutableAssertions(fn, testParams, nil, imports, assertingHelpers)
+			units = append(units, buildTestUnit(fn, fset, source, srcLen, filePath, kind, fn.Name.Name, assertions, imports.localNames))
 			continue
 		}
-		// Compile-only examples without an output comment are not executed.
-		if signature.Kind == "example" && !examples[fn.Name.Name] {
-			continue
-		}
 
-		// Function declaration span
-		declStart := fset.Position(fn.Pos())
-		declEnd := fset.Position(fn.End())
-
-		// Extract function body block { ... } as RawBody so declaration names
-		// do not prevent identical test bodies from matching in clone detection (R1)
-		bodyStartOff := fset.Position(fn.Body.Pos()).Offset
-		bodyEndOff := fset.Position(fn.Body.End()).Offset
-		if bodyStartOff < 0 {
-			bodyStartOff = 0
+		// testify/suite test method
+		if hasSuiteImport && fn.Recv != nil && len(fn.Recv.List) == 1 {
+			recvTypeName, recvParam, ok := classifySuiteMethod(fn)
+			if !ok {
+				continue
+			}
+			unitName := recvTypeName + "." + fn.Name.Name
+			assertions := findExecutableAssertions(fn, nil, recvParam, imports, assertingHelpers)
+			units = append(units, buildTestUnit(fn, fset, source, srcLen, filePath, "unit", unitName, assertions, imports.localNames))
 		}
-		if bodyEndOff > srcLen {
-			bodyEndOff = srcLen
-		}
-
-		rawBody := ""
-		if bodyStartOff < bodyEndOff {
-			rawBody = string(source[bodyStartOff:bodyEndOff])
-		}
-
-		units = append(units, parser.TestUnit{
-			Name:        fn.Name.Name,
-			FilePath:    filePath,
-			StartLine:   declStart.Line,
-			EndLine:     declEnd.Line,
-			Kind:        signature.Kind,
-			RawBody:     rawBody,
-			Assertions:  findExecutableAssertions(fn, signature.Param, imports.localNames),
-			ASTDecl:     fn,
-			FileSet:     fset,
-			FileImports: imports.localNames,
-		})
 	}
 
 	return units, nil

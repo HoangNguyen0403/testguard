@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/HoangNguyen0403/testguard/pkg/parser"
 	"github.com/HoangNguyen0403/testguard/pkg/parser/golang"
 )
 
@@ -567,4 +568,367 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestAC2_1_TableTestWithTRun(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func TestTable(t *testing.T) {
+	cases := []struct{ name string }{{ name: "case1" }}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if 1 != 1 {
+				t.Errorf("fail")
+			}
+		})
+	}
+}
+`)
+	units, err := adapter.LocateTests(source, "table_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) == 0 {
+		t.Errorf("expected non-empty Assertions in table test using t.Run + inner t.Errorf, got empty")
+	}
+}
+
+func TestAC2_2_TestifySuiteRunnerAndMethods(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/stretchr/testify/suite"
+)
+
+type MySuite struct {
+	suite.Suite
+}
+
+func (s *MySuite) TestAdd() {
+	s.Equal(2, 1+1)
+}
+
+func (s *MySuite) TestEmpty() {
+	// no assertions
+}
+
+func (s *MySuite) NonTestMethod() {
+	s.Equal(1, 1)
+}
+
+func TestMySuite(t *testing.T) {
+	suite.Run(t, new(MySuite))
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	runner, ok := unitMap["TestMySuite"]
+	if !ok {
+		t.Fatalf("expected TestMySuite unit to be found")
+	}
+	if runner.Kind != "suite_runner" {
+		t.Errorf("expected TestMySuite Kind to be 'suite_runner', got %q", runner.Kind)
+	}
+
+	testAdd, ok := unitMap["MySuite.TestAdd"]
+	if !ok {
+		t.Fatalf("expected MySuite.TestAdd unit to be found")
+	}
+	if testAdd.Kind != "unit" {
+		t.Errorf("expected MySuite.TestAdd Kind to be 'unit', got %q", testAdd.Kind)
+	}
+	if len(testAdd.Assertions) == 0 {
+		t.Errorf("expected MySuite.TestAdd to have non-empty Assertions")
+	}
+
+	testEmpty, ok := unitMap["MySuite.TestEmpty"]
+	if !ok {
+		t.Fatalf("expected MySuite.TestEmpty unit to be found")
+	}
+	if testEmpty.Kind != "unit" {
+		t.Errorf("expected MySuite.TestEmpty Kind to be 'unit', got %q", testEmpty.Kind)
+	}
+	if len(testEmpty.Assertions) != 0 {
+		t.Errorf("expected MySuite.TestEmpty to have 0 Assertions, got %v", testEmpty.Assertions)
+	}
+
+	if _, ok := unitMap["MySuite.NonTestMethod"]; ok {
+		t.Errorf("NonTestMethod should not be emitted as a test unit")
+	}
+}
+
+func TestAC2_3_SameFileHelpers(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func mustEqual(t *testing.T, a, b int) {
+	if a != b {
+		t.Fatalf("not equal: %d != %d", a, b)
+	}
+}
+
+func noAssertHelper(t *testing.T, a int) {
+	_ = a
+}
+
+func TestWithAssertingHelper(t *testing.T) {
+	mustEqual(t, 1, 1)
+}
+
+func TestWithNonAssertingHelper(t *testing.T) {
+	noAssertHelper(t, 1)
+}
+`)
+	units, err := adapter.LocateTests(source, "helper_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	u1, ok := unitMap["TestWithAssertingHelper"]
+	if !ok {
+		t.Fatalf("expected TestWithAssertingHelper")
+	}
+	if len(u1.Assertions) == 0 {
+		t.Errorf("expected TestWithAssertingHelper to have non-empty assertions")
+	}
+
+	u2, ok := unitMap["TestWithNonAssertingHelper"]
+	if !ok {
+		t.Fatalf("expected TestWithNonAssertingHelper")
+	}
+	if len(u2.Assertions) != 0 {
+		t.Errorf("expected TestWithNonAssertingHelper to have 0 assertions, got %v", u2.Assertions)
+	}
+}
+
+func TestAC2_4_MockVerification(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/golang/mock/gomock"
+	"github.com/DATA-DOG/go-sqlmock"
+)
+
+type MockObj struct{}
+func (m *MockObj) EXPECT() *MockObj { return m }
+func (m *MockObj) Get() *MockObj { return m }
+func (m *MockObj) Return(x int) {}
+
+func TestGomock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_ = ctrl
+	var m MockObj
+	m.EXPECT().Get().Return(1)
+}
+
+type SqlmockObj struct{}
+func (s *SqlmockObj) ExpectationsWereMet() error { return nil }
+
+ func TestSqlmock(t *testing.T) {
+	var mock SqlmockObj
+	_ = mock.ExpectationsWereMet()
+}
+`)
+	units, err := adapter.LocateTests(source, "mock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	u1, ok := unitMap["TestGomock"]
+	if !ok {
+		t.Fatalf("expected TestGomock")
+	}
+	if len(u1.Assertions) == 0 {
+		t.Errorf("expected TestGomock to have non-empty assertions")
+	}
+
+	u2, ok := unitMap["TestSqlmock"]
+	if !ok {
+		t.Fatalf("expected TestSqlmock")
+	}
+	if len(u2.Assertions) == 0 {
+		t.Errorf("expected TestSqlmock to have non-empty assertions")
+	}
+}
+
+func TestAC2_EdgeCases_NestedTRunAndTB(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func TestNestedTRun(t *testing.T) {
+	t.Run("outer", func(t *testing.T) {
+		t.Run("inner", func(tb testing.TB) {
+			tb.Fatalf("nested boom")
+		})
+	})
+}
+`)
+	units, err := adapter.LocateTests(source, "nested_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) == 0 {
+		t.Errorf("expected nested t.Run with testing.TB to have non-empty assertions")
+	}
+}
+
+func TestAC2_EdgeCases_SuiteRequireAndValueReceiver(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/stretchr/testify/suite"
+)
+
+type MySuite struct {
+	suite.Suite
+}
+
+func (s *MySuite) TestRequireChained() {
+	s.Require().NoError(nil)
+}
+
+func (s MySuite) TestValueReceiver() {
+	s.Assert().True(true)
+}
+
+func TestSuiteRunner(t *testing.T) {
+	suite.Run(t, new(MySuite))
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_ext_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	u1, ok := unitMap["MySuite.TestRequireChained"]
+	if !ok {
+		t.Fatalf("expected MySuite.TestRequireChained")
+	}
+	if len(u1.Assertions) == 0 {
+		t.Errorf("expected assertions for s.Require().NoError")
+	}
+
+	u2, ok := unitMap["MySuite.TestValueReceiver"]
+	if !ok {
+		t.Fatalf("expected MySuite.TestValueReceiver")
+	}
+	if len(u2.Assertions) == 0 {
+		t.Errorf("expected assertions for value receiver s.Assert().True")
+	}
+}
+
+func TestAC2_EdgeCases_HelperOnlyOneHop(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func assertingLeafHelper(t *testing.T) {
+	t.Fatal("fail")
+}
+
+// intermediateHelper only calls another helper, doesn't directly assert.
+// Per requirement (d): Only one hop: helpers calling helpers are not followed.
+func intermediateHelper(t *testing.T) {
+	assertingLeafHelper(t)
+}
+
+func TestCallingIntermediate(t *testing.T) {
+	intermediateHelper(t)
+}
+`)
+	units, err := adapter.LocateTests(source, "helper_hops_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	// TestCallingIntermediate calls intermediateHelper which only calls another helper.
+	// Per requirement (d), only one hop is followed, so intermediateHelper is NOT an asserting helper.
+	if len(units[0].Assertions) != 0 {
+		t.Errorf("expected 0 assertions when calling multi-hop helper, got %v", units[0].Assertions)
+	}
+}
+
+func TestAC2_EdgeCases_GomockPrecision(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/golang/mock/gomock"
+)
+
+type MockObj struct{}
+func (m *MockObj) EXPECT() *MockObj { return m }
+
+// TestEXPECTWithoutController must not count EXPECT as assertion
+func TestEXPECTWithoutController(t *testing.T) {
+	var m MockObj
+	m.EXPECT()
+}
+
+// TestControllerWithoutEXPECT must not count NewController alone as assertion
+func TestControllerWithoutEXPECT(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_ = ctrl
+}
+`)
+	units, err := adapter.LocateTests(source, "gomock_prec_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	u1 := unitMap["TestEXPECTWithoutController"]
+	if len(u1.Assertions) != 0 {
+		t.Errorf("expected 0 assertions for EXPECT without NewController, got %v", u1.Assertions)
+	}
+
+	u2 := unitMap["TestControllerWithoutEXPECT"]
+	if len(u2.Assertions) != 0 {
+		t.Errorf("expected 0 assertions for NewController without EXPECT, got %v", u2.Assertions)
+	}
 }
