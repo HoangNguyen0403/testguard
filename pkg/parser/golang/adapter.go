@@ -467,9 +467,14 @@ func findExecutableAssertions(
 		switch node := n.(type) {
 		case *ast.FuncLit:
 			if node.Type != nil && node.Type.Params != nil {
-				expr, paramObj, ok := singleParameterType(node.Type.Params)
-				if ok && paramObj != nil && isTestingType(expr, imports, "T", "TB") {
-					testingParamSet[paramObj] = true
+				for _, field := range node.Type.Params.List {
+					if isTestingType(field.Type, imports, "T", "TB") {
+						for _, name := range field.Names {
+							if name.Obj != nil {
+								testingParamSet[name.Obj] = true
+							}
+						}
+					}
 				}
 			}
 		case *ast.AssignStmt:
@@ -623,10 +628,20 @@ func findExecutableAssertions(
 		}
 	}
 
+	hasGomockController := false
+	hasChainedExpect := false
+
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
+		}
+
+		if isGomockNewControllerCall(call, imports, testingParamSet, recvParam) {
+			hasGomockController = true
+		}
+		if isChainedExpectCall(call) {
+			hasChainedExpect = true
 		}
 
 		// Helper calls: one-hop same-file helpers taking a testing parameter (resolved by ast.Ident.Obj)
@@ -777,6 +792,9 @@ func findExecutableAssertions(
 
 		return true
 	})
+	if hasGomockController && hasChainedExpect {
+		add("verify:gomock")
+	}
 
 	return assertions
 }
@@ -806,6 +824,95 @@ func hasSuiteRunCall(body *ast.BlockStmt, ctx importContext) bool {
 		return true
 	})
 	return hasRun
+}
+
+func unwrapParen(expr ast.Expr) ast.Expr {
+	for {
+		p, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = p.X
+	}
+}
+
+func isGomockNewControllerCall(call *ast.CallExpr, imports importContext, testingParamSet map[*ast.Object]bool, recvParam *ast.Object) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "NewController" {
+		return false
+	}
+	pkgIdent, ok := unwrapParen(sel.X).(*ast.Ident)
+	if !ok || pkgIdent.Obj != nil || !isGomockImportPath(imports.localNames[pkgIdent.Name]) {
+		return false
+	}
+	if len(call.Args) < 1 {
+		return false
+	}
+	arg0 := unwrapParen(call.Args[0])
+	if argIdent, ok := arg0.(*ast.Ident); ok {
+		if (argIdent.Obj != nil && testingParamSet[argIdent.Obj]) || (recvParam != nil && argIdent.Obj == recvParam) {
+			return true
+		}
+	} else if argCall, ok := arg0.(*ast.CallExpr); ok {
+		if isSuiteT(argCall, recvParam) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChainedExpectCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	recv := unwrapParen(sel.X)
+	expectCall, ok := recv.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	expectSel, ok := expectCall.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	return expectSel.Sel.Name == "EXPECT"
+}
+
+func isPureDelegatingRunner(body *ast.BlockStmt, testParam *ast.Object) bool {
+	if body == nil || len(body.List) == 0 || testParam == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		exprStmt, ok := stmt.(*ast.ExprStmt)
+		if !ok {
+			return false
+		}
+		call, ok := exprStmt.X.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Run" {
+			return false
+		}
+		recvIdent, ok := unwrapParen(sel.X).(*ast.Ident)
+		if !ok || recvIdent.Obj != testParam {
+			return false
+		}
+		if len(call.Args) != 2 {
+			return false
+		}
+		arg0 := unwrapParen(call.Args[0])
+		lit, ok := arg0.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return false
+		}
+		arg1 := unwrapParen(call.Args[1])
+		if _, ok := arg1.(*ast.Ident); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 var testifySuiteAssertionMethods = map[string]bool{
@@ -1170,7 +1277,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 			}
 
 			kind := signature.Kind
-			if kind == "unit" && hasSuiteRunCall(fn.Body, imports) {
+			if kind == "unit" && (hasSuiteRunCall(fn.Body, imports) || isPureDelegatingRunner(fn.Body, signature.Param)) {
 				kind = "suite_runner"
 			}
 

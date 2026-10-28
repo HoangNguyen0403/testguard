@@ -747,7 +747,7 @@ func TestGomockUnrelated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	_ = ctrl
 	var m MockObj
-	m.EXPECT().Get().Return(1)
+	m.EXPECT()
 }
 
 type SqlmockObj struct{}
@@ -1339,5 +1339,129 @@ func TestRunS(t *testing.T) {
 	}
 	if len(unrelatedAssertions) != 0 {
 		t.Errorf("expected 0 assertions for S.TestUnrelated, got %v", unrelatedAssertions)
+	}
+}
+
+func TestTask9_Shape1_GomockFunctionLevelCredit(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/golang/mock/gomock"
+)
+
+func TestSvc(t *testing.T) {
+	type tc struct{ name string; doMock func(*Svc) }
+	cases := []tc{{name: "ok", doMock: func(s *Svc) {
+		m := shared.GetMockRepository(s.Table, s)
+		m.EXPECT().First(gomock.Any()).Return(nil, nil)
+	}}}
+	ctrl := gomock.NewController(t)
+	for _, c := range cases {
+		srv := newMockService(ctrl)
+		t.Run(c.name, func(t *testing.T) { c.doMock(srv); srv.Do() })
+	}
+}
+
+func TestChainedExpectWithoutController(t *testing.T) {
+	m := shared.GetMockRepository()
+	m.EXPECT().First(gomock.Any()).Return(nil, nil)
+}
+
+func TestControllerWithBareExpect(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	_ = ctrl
+	var m MockObj
+	m.EXPECT()
+}
+`)
+	units, err := adapter.LocateTests(source, "task9_gomock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	uSvc, ok := unitMap["TestSvc"]
+	if !ok {
+		t.Fatalf("expected TestSvc to be found")
+	}
+	if len(uSvc.Assertions) != 1 || uSvc.Assertions[0] != "verify:gomock" {
+		t.Errorf("expected TestSvc to have [verify:gomock], got %v", uSvc.Assertions)
+	}
+
+	uNoCtrl, ok := unitMap["TestChainedExpectWithoutController"]
+	if !ok {
+		t.Fatalf("expected TestChainedExpectWithoutController to be found")
+	}
+	if len(uNoCtrl.Assertions) != 0 {
+		t.Errorf("expected TestChainedExpectWithoutController to have 0 assertions, got %v", uNoCtrl.Assertions)
+	}
+
+	uBare, ok := unitMap["TestControllerWithBareExpect"]
+	if !ok {
+		t.Fatalf("expected TestControllerWithBareExpect to be found")
+	}
+	if len(uBare.Assertions) != 0 {
+		t.Errorf("expected TestControllerWithBareExpect to have 0 assertions, got %v", uBare.Assertions)
+	}
+}
+
+func TestTask9_Shape2_PureDelegatingRunner(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+)
+
+func TestGetOrdersV2(t *testing.T) {
+	if 1 != 1 {
+		t.Fatal("fail")
+	}
+}
+
+func TestGetOrderDetailV2(t *testing.T) {
+	if 2 != 2 {
+		t.Fatal("fail")
+	}
+}
+
+func TestOrderServiceSuite(t *testing.T) {
+	t.Run("GetOrdersV2", TestGetOrdersV2)
+	t.Run("GetOrderDetailV2", TestGetOrderDetailV2)
+}
+
+func TestMixedRunner(t *testing.T) {
+	setup()
+	t.Run("GetOrdersV2", TestGetOrdersV2)
+}
+`)
+	units, err := adapter.LocateTests(source, "task9_runner_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	uRunner, ok := unitMap["TestOrderServiceSuite"]
+	if !ok {
+		t.Fatalf("expected TestOrderServiceSuite to be found")
+	}
+	if uRunner.Kind != "suite_runner" {
+		t.Errorf("expected TestOrderServiceSuite to have Kind 'suite_runner', got %q", uRunner.Kind)
+	}
+
+	uMixed, ok := unitMap["TestMixedRunner"]
+	if !ok {
+		t.Fatalf("expected TestMixedRunner to be found")
+	}
+	if uMixed.Kind != "unit" {
+		t.Errorf("expected TestMixedRunner to have Kind 'unit', got %q", uMixed.Kind)
 	}
 }

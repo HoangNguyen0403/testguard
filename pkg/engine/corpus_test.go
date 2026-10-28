@@ -169,6 +169,18 @@ func TestPrecisionCorpus(t *testing.T) {
 			expected: nil,
 		},
 		{
+			name:     "Go: gomock with cross-file helper returning mock (Task 9 Shape 1)",
+			dir:      "testdata/corpus/go_gomock_cross_file_helper",
+			language: "Go",
+			expected: nil,
+		},
+		{
+			name:     "Go: pure delegating runner (Task 9 Shape 2)",
+			dir:      "testdata/corpus/go_pure_delegating_runner",
+			language: "Go",
+			expected: nil,
+		},
+		{
 			name:     "TS: multiline expression arrow helper (F2 negative)",
 			dir:      "testdata/corpus/ts_multiline_arrow",
 			language: "TypeScript",
