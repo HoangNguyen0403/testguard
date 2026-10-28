@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
-## [Unreleased]
+## [0.1.5] - 2026-10-28
 
 ### Removed
 - **Dead Subcommand**:
@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `GUARD-E2E-01` (Warning): Catches arbitrary hard wait timers in E2E tests (`page.waitForTimeout(3000)`, `Future.delayed(2s)`).
 
 ---
-## [0.1.4] - Unreleased
+## [0.1.4] - 2026-10-28
 
 ### Breaking Changes
 - **Versioned Machine-Readable JSON Envelope (`schema_version: 1`)**:

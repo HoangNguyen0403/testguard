@@ -498,7 +498,7 @@ func TestTerminalReporterSuppressesArtifactClaimOnExportFailure(t *testing.T) {
 
 func TestWriteJSONReportSchemaV1(t *testing.T) {
 	report := models.NewScanReport()
-	report.Tool = models.NewToolMeta("0.1.4", "none", "unknown")
+	report.Tool = models.NewToolMeta("0.1.5", "none", "unknown")
 	report.Scope.RequestedPaths = []string{"sample_test.go"}
 	report.Scope.Files = []string{}
 	report.Analysis.DiscoveredFiles = 0
@@ -530,7 +530,7 @@ func TestWriteJSONReportSchemaV1(t *testing.T) {
 	}
 
 	tool, ok := parsed["tool"].(map[string]interface{})
-	if !ok || tool["name"] != "testguard" || tool["version"] != "0.1.4" {
+	if !ok || tool["name"] != "testguard" || tool["version"] != "0.1.5" {
 		t.Errorf("unexpected tool payload: %+v", parsed["tool"])
 	}
 	if tool["commit"] != nil || tool["built_at"] != nil {
