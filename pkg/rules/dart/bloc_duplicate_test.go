@@ -6,6 +6,7 @@ import (
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
+	dartparser "github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 	"github.com/HoangNguyen0403/testguard/pkg/rules/dart"
 )
 
@@ -174,5 +175,23 @@ func TestBlocDuplicate_LeadingTestNameStripped(t *testing.T) {
 
 	if len(violations) != 1 {
 		t.Fatalf("expected exactly 1 violation when only test names differ in leading RawBody, got %d: %+v", len(violations), violations)
+	}
+}
+func TestBlocDuplicate_DifferentStringWhitespace_NoFinding(t *testing.T) {
+	src := `void main() {
+		blocTest('first', build: () => Bloc(), act: (b) => b.add('a  b'), expect: () => [State()]);
+		blocTest('second', build: () => Bloc(), act: (b) => b.add('a b'), expect: () => [State()]);
+	}`
+	adapter := dartparser.NewAdapter()
+	units, err := adapter.LocateTests([]byte(src), "bloc_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	checker := dart.NewBlocDuplicateRule()
+	violations := checker.Check(units)
+
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations when string whitespace differs, got %d: %+v", len(violations), violations)
 	}
 }

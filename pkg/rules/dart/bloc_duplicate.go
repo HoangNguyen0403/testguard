@@ -38,7 +38,7 @@ func (r *BlocDuplicateRule) Check(units []parser.TestUnit) []models.Violation {
 				FilePath:   unit.FilePath,
 				LineNumber: unit.StartLine,
 				Column:     1,
-				Message:    fmt.Sprintf("Duplicate BLoC scenario: '%s' has identical act and expect blocks to '%s' (line %d).", unit.Name, first.Name, first.StartLine),
+				Message:    fmt.Sprintf("Duplicate BLoC scenario: '%s' has identical build/setUp/seed/act/expect to '%s' (line %d).", unit.Name, first.Name, first.StartLine),
 				Suggestion: "Check whether this test exercises a distinct edge case or consolidate into a single parameterized test.",
 			})
 		} else {
@@ -62,9 +62,116 @@ func normalizeScenarioBody(rawBody string, testName string) string {
 			body = strings.TrimLeft(body, ", \t\r\n")
 		}
 	}
-	stripped := stripComments(body)
-	words := strings.Fields(stripped)
-	return strings.Join(words, " ")
+	return tokenizePreservingStrings(body)
+}
+
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$'
+}
+
+func tokenizePreservingStrings(src string) string {
+	var tokens []string
+	n := len(src)
+	for i := 0; i < n; {
+		c := src[i]
+		if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+			i++
+			continue
+		}
+		// Single-line comment
+		if i+1 < n && c == '/' && src[i+1] == '/' {
+			i += 2
+			for i < n && src[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		// Block comment
+		if i+1 < n && c == '/' && src[i+1] == '*' {
+			i += 2
+			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
+				i++
+			}
+			i += 2
+			continue
+		}
+		// Triple-quoted strings
+		if (c == '\'' || c == '"') && i+2 < n && src[i+1] == c && src[i+2] == c {
+			start := i
+			i += 3
+			for i+2 < n {
+				if src[i] == '\\' {
+					i += 2
+					continue
+				}
+				if src[i] == c && src[i+1] == c && src[i+2] == c {
+					i += 3
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, src[start:i])
+			continue
+		}
+		// Raw strings
+		if (c == 'r' || c == 'R') && i+1 < n && (src[i+1] == '\'' || src[i+1] == '"') {
+			quote := src[i+1]
+			start := i
+			i += 2
+			for i < n && src[i] != quote && src[i] != '\n' {
+				i++
+			}
+			if i < n && src[i] == quote {
+				i++
+			}
+			tokens = append(tokens, src[start:i])
+			continue
+		}
+		// Regular quoted strings
+		if c == '\'' || c == '"' {
+			start := i
+			quote := c
+			i++
+			for i < n && src[i] != quote {
+				if src[i] == '\\' {
+					i += 2
+					continue
+				}
+				if src[i] == '\n' {
+					break
+				}
+				i++
+			}
+			if i < n && src[i] == quote {
+				i++
+			}
+			tokens = append(tokens, src[start:i])
+			continue
+		}
+		// Identifiers and numbers
+		if isIdentChar(c) {
+			start := i
+			for i < n && isIdentChar(src[i]) {
+				i++
+			}
+			tokens = append(tokens, src[start:i])
+			continue
+		}
+		// Multi-char operators
+		if i+1 < n {
+			two := src[i : i+2]
+			if two == "=>" || two == "==" || two == "!=" || two == "<=" || two == ">=" ||
+				two == "&&" || two == "||" || two == "++" || two == "--" || two == "??" || two == "?." {
+				tokens = append(tokens, two)
+				i += 2
+				continue
+			}
+		}
+		// Single punctuation / operator
+		tokens = append(tokens, string(c))
+		i++
+	}
+	return strings.Join(tokens, " ")
 }
 
 func stripComments(code string) string {

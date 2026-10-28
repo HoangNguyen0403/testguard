@@ -126,22 +126,90 @@ var (
 	tsFunctionHelperRegex = regexp.MustCompile(`(?m)\b(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\([^)]*\)\s*\{`)
 	tsVarArrowHelperRegex = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>\s*\{`)
 	tsVarFuncHelperRegex  = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s+)?function\s*\([^)]*\)\s*\{`)
+	tsVarArrowExprRegex   = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>`)
 )
+
+func blankCommentsAndStrings(src string, isTS bool) string {
+	b := []byte(src)
+	n := len(b)
+	for i := 0; i < n; {
+		if i+1 < n && b[i] == '/' && b[i+1] == '/' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n && b[i] != '\n' {
+				if b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if i+1 < n && b[i] == '/' && b[i+1] == '*' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n {
+				if i+1 < n && b[i] == '*' && b[i+1] == '/' {
+					b[i] = ' '
+					b[i+1] = ' '
+					i += 2
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if b[i] == '\'' || b[i] == '"' || (isTS && b[i] == '`') {
+			delim := b[i]
+			b[i] = ' '
+			i++
+			for i < n {
+				if b[i] == '\\' {
+					b[i] = ' '
+					if i+1 < n && b[i+1] != '\n' && b[i+1] != '\r' {
+						b[i+1] = ' '
+					}
+					i += 2
+					continue
+				}
+				if b[i] == delim {
+					b[i] = ' '
+					i++
+					break
+				}
+				if (delim == '\'' || delim == '"') && b[i] == '\n' {
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return string(b)
+}
 
 func collectTSAssertingHelpers(src string) map[string]bool {
 	helpers := make(map[string]bool)
 
-	scanRegex := func(re *regexp.Regexp) {
+	scanBlock := func(re *regexp.Regexp) {
 		matches := re.FindAllStringSubmatchIndex(src, -1)
 		for _, m := range matches {
 			name := src[m[2]:m[3]]
-			// open brace is the last byte of the match (m[1]-1)
 			openBrace := m[1] - 1
 			if openBrace >= 0 && openBrace < len(src) && src[openBrace] == '{' {
-				closeBrace := parser.FindMatchingBrace(src, openBrace)
+				closeBrace := parser.FindMatchingTSBrace(src, openBrace)
 				if closeBrace != -1 {
 					body := src[openBrace : closeBrace+1]
-					if genericAssertionRegex.MatchString(body) {
+					cleanBody := blankCommentsAndStrings(body, true)
+					if genericAssertionRegex.MatchString(cleanBody) {
 						helpers[name] = true
 					}
 				}
@@ -149,9 +217,31 @@ func collectTSAssertingHelpers(src string) map[string]bool {
 		}
 	}
 
-	scanRegex(tsFunctionHelperRegex)
-	scanRegex(tsVarArrowHelperRegex)
-	scanRegex(tsVarFuncHelperRegex)
+	scanBlock(tsFunctionHelperRegex)
+	scanBlock(tsVarArrowHelperRegex)
+	scanBlock(tsVarFuncHelperRegex)
+
+	// Expression-bodied arrows: const f = (...) => expect(...)...;
+	arrowMatches := tsVarArrowExprRegex.FindAllStringSubmatchIndex(src, -1)
+	for _, m := range arrowMatches {
+		name := src[m[2]:m[3]]
+		idx := m[1]
+		for idx < len(src) && (src[idx] == ' ' || src[idx] == '\t' || src[idx] == '\r' || src[idx] == '\n') {
+			idx++
+		}
+		if idx < len(src) && src[idx] != '{' {
+			end := idx
+			for end < len(src) && src[end] != ';' && src[end] != '\n' {
+				end++
+			}
+			body := src[idx:end]
+			cleanBody := blankCommentsAndStrings(body, true)
+			if genericAssertionRegex.MatchString(cleanBody) {
+				helpers[name] = true
+			}
+		}
+	}
+
 	return helpers
 }
 
@@ -222,7 +312,7 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 			openParenRel := strings.Index(src[startOffset:], "(")
 			if openParenRel != -1 {
 				openParen := startOffset + openParenRel
-				closeParen := parser.FindMatchingParen(src, openParen)
+				closeParen := parser.FindMatchingTSParen(src, openParen)
 				if closeParen != -1 {
 					// argsBody is from after the comma (m[1]) up to closeParen
 					body = strings.TrimSpace(src[m[1]:closeParen])
@@ -233,7 +323,12 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 			openBrace := strings.Index(src[startOffset:], "{")
 			if openBrace != -1 {
 				openIdx := startOffset + openBrace
-				closeIdx := parser.FindMatchingBrace(src, openIdx)
+				closeIdx := -1
+				if isTS {
+					closeIdx = parser.FindMatchingTSBrace(src, openIdx)
+				} else {
+					closeIdx = parser.FindMatchingBrace(src, openIdx)
+				}
 				if closeIdx != -1 {
 					body = src[startOffset : closeIdx+1]
 				}
@@ -248,15 +343,19 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 			}
 		}
 
+		cleanBody := blankCommentsAndStrings(body, isTS)
 		var assertions []string
-		if genericAssertionRegex.MatchString(body) {
+		if genericAssertionRegex.MatchString(cleanBody) {
 			assertions = append(assertions, "assert")
 		}
 		if isTS && len(assertingHelpers) > 0 {
 			for helper := range assertingHelpers {
-				// Check if body calls helper(
-				if strings.Contains(body, helper+"(") {
-					assertions = append(assertions, "helper:"+helper)
+				callPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(helper) + `\s*\(`)
+				if callPattern.MatchString(cleanBody) {
+					shadowPattern := regexp.MustCompile(`(?:\b(?:const|let|var)\s+` + regexp.QuoteMeta(helper) + `\b|\bfunction\s+` + regexp.QuoteMeta(helper) + `\b)`)
+					if !shadowPattern.MatchString(cleanBody) {
+						assertions = append(assertions, "helper:"+helper)
+					}
 				}
 			}
 		}

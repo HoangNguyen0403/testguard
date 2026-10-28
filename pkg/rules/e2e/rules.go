@@ -52,8 +52,8 @@ func (r *HardWaitRule) EvaluateFile(units []parser.TestUnit, filePath string, fi
 		var candidates []candidateMatch
 
 		if isTS {
-			hasFakeTimers := fakeTimersRegex.MatchString(fileSrc)
-
+			cleanFileSrc := blankCommentsAndStrings(fileSrc)
+			hasFakeTimers := fakeTimersRegex.MatchString(cleanFileSrc)
 			// 1. waitForTimeout
 			for _, m := range waitForTimeoutRegex.FindAllStringIndex(unit.RawBody, -1) {
 				idx := m[0]
@@ -69,7 +69,7 @@ func (r *HardWaitRule) EvaluateFile(units []parser.TestUnit, filePath string, fi
 					continue
 				}
 				args := splitCallArgs(unit.RawBody[openParen+1 : closeParen])
-				if len(args) >= 1 && isLiteralZero(args[0]) {
+				if len(args) < 1 || !isPositiveDelay(args[0]) {
 					continue
 				}
 				candidates = append(candidates, candidateMatch{index: idx, callName: "waitForTimeout"})
@@ -91,10 +91,7 @@ func (r *HardWaitRule) EvaluateFile(units []parser.TestUnit, filePath string, fi
 						continue
 					}
 					args := splitCallArgs(unit.RawBody[openParen+1 : closeParen])
-					if len(args) < 2 {
-						continue
-					}
-					if isLiteralZero(args[1]) {
+					if len(args) < 2 || !isPositiveDelay(args[1]) {
 						continue
 					}
 					candidates = append(candidates, candidateMatch{index: idx, callName: "setTimeout"})
@@ -214,15 +211,86 @@ func isInsideClassBody(src string, targetIdx int) bool {
 	return false
 }
 
-func isLiteralZero(s string) bool {
+func isPositiveDelay(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" || s == "0" || s == "0.0" || s == "+0" || s == "-0" {
-		return true
+	if s == "" || s == "undefined" {
+		return false
 	}
-	if val, err := strconv.ParseFloat(s, 64); err == nil && val == 0 {
-		return true
+	if val, err := strconv.ParseFloat(s, 64); err == nil {
+		return val > 0
 	}
-	return false
+	return true
+}
+
+func isLiteralZero(s string) bool {
+	return !isPositiveDelay(s)
+}
+
+func blankCommentsAndStrings(src string) string {
+	b := []byte(src)
+	n := len(b)
+	for i := 0; i < n; {
+		if i+1 < n && b[i] == '/' && b[i+1] == '/' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n && b[i] != '\n' {
+				if b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if i+1 < n && b[i] == '/' && b[i+1] == '*' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n {
+				if i+1 < n && b[i] == '*' && b[i+1] == '/' {
+					b[i] = ' '
+					b[i+1] = ' '
+					i += 2
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if b[i] == '\'' || b[i] == '"' || b[i] == '`' {
+			delim := b[i]
+			b[i] = ' '
+			i++
+			for i < n {
+				if b[i] == '\\' {
+					b[i] = ' '
+					if i+1 < n && b[i+1] != '\n' && b[i+1] != '\r' {
+						b[i+1] = ' '
+					}
+					i += 2
+					continue
+				}
+				if b[i] == delim {
+					b[i] = ' '
+					i++
+					break
+				}
+				if (delim == '\'' || delim == '"') && b[i] == '\n' {
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return string(b)
 }
 
 func isCodeIndex(src string, targetIdx int) bool {

@@ -22,6 +22,10 @@ func TestTautologyRule_TS(t *testing.T) {
 		{"toBeFalsy literal false", `expect(false).toBeFalsy();`, 1},
 		{"toBe different numbers", `expect(1).toBe(2);`, 0},
 		{"toBe non-literal variable", `expect(x).toBe(x);`, 0},
+		{"commented tautology line", `// expect(true).toBe(true);`, 0},
+		{"commented tautology block", `/* expect(true).toBeTruthy(); */`, 0},
+		{"string literal tautology", `const s = "expect(true).toBe(true);";`, 0},
+		{"template string interpolation", "expect(`value ${actual}`).toBe(`value ${actual}`);", 0},
 	}
 
 	rule := hygiene.NewTautologyRule()
@@ -63,6 +67,9 @@ func TestTautologyRule_Dart(t *testing.T) {
 		{"expect literal equals", `expect("bar", equals("bar"));`, 1},
 		{"expect different numbers", `expect(1, 2);`, 0},
 		{"expect non-literal variable", `expect(x, x);`, 0},
+		{"commented tautology line", `// expect(true, isTrue);`, 0},
+		{"commented tautology block", `/* expect(true, isTrue); */`, 0},
+		{"string literal tautology", `final s = 'expect(true, isTrue);';`, 0},
 	}
 
 	rule := hygiene.NewTautologyRule()
@@ -104,6 +111,8 @@ func TestTautologyRule_Go(t *testing.T) {
 		{"assert.Equal custom testing var", `assert.Equal(tt, "ok", "ok")`, 1},
 		{"assert.Equal different numbers", `assert.Equal(t, 1, 2)`, 0},
 		{"assert.Equal non-literal variable", `assert.Equal(t, x, x)`, 0},
+		{"commented tautology line", `// assert.True(t, true)`, 0},
+		{"string literal tautology", `msg := "assert.True(t, true)"`, 0},
 	}
 
 	rule := hygiene.NewTautologyRule()
@@ -224,6 +233,13 @@ func TestSkipRule_Dart(t *testing.T) {
 			t.Errorf("expected 0 violations for skip: false, got %d", len(res))
 		}
 	})
+	t.Run("Options skip true should not be flagged", func(t *testing.T) {
+		src := "void main() { test('real', () { final options = Options(skip: true); expect(options.enabled, isTrue); }); }"
+		res := rule.CheckFile("options_test.dart", src)
+		if len(res) != 0 {
+			t.Errorf("expected 0 violations for Options(skip: true), got %d: %+v", len(res), res)
+		}
+	})
 }
 
 func TestSkipRule_Go(t *testing.T) {
@@ -272,6 +288,21 @@ func TestSkipRule_Go(t *testing.T) {
 		}
 		if res[0].LineNumber != 6 {
 			t.Errorf("expected line 6, got %d", res[0].LineNumber)
+		}
+	})
+	t.Run("collection.Skip should not be flagged", func(t *testing.T) {
+		src := "package foo\n\nimport \"testing\"\n\nfunc TestReal(t *testing.T) {\n\tcollection.Skip(2)\n\tif result != 2 { t.Fatal(result) }\n}"
+		res := rule.CheckFile("skip_test.go", src)
+		if len(res) != 0 {
+			t.Errorf("expected 0 violations for collection.Skip, got %d: %+v", len(res), res)
+		}
+	})
+
+	t.Run("Go raw string containing t.Skip should not be flagged", func(t *testing.T) {
+		src := "package foo\n\nimport \"testing\"\n\nconst example = `\nfunc TestFake(t *testing.T) {\n\tt.Skip(\"example\")\n}\n`\n\nfunc TestReal(t *testing.T) { if result != 2 { t.Fatal(result) } }"
+		res := rule.CheckFile("raw_test.go", src)
+		if len(res) != 0 {
+			t.Errorf("expected 0 violations for raw string containing t.Skip, got %d: %+v", len(res), res)
 		}
 	})
 }

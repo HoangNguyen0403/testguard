@@ -161,7 +161,10 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 					if isDirectAssertion(ident) {
 						assertions = append(assertions, ident)
 					} else if assertingHelpers[ident] && ident != testName {
-						assertions = append(assertions, "helper:"+ident)
+						shadowRe := regexp.MustCompile(`(?:\b(?:var|final|const)\s+` + regexp.QuoteMeta(ident) + `\b|\b` + regexp.QuoteMeta(ident) + `\s*=)`)
+						if !shadowRe.MatchString(stripCommentsAndStrings(body)) {
+							assertions = append(assertions, "helper:"+ident)
+						}
 					}
 				}
 				continue
@@ -521,6 +524,40 @@ func stripComments(code string) string {
 	return buf.String()
 }
 
+func stripCommentsAndStrings(code string) string {
+	b := []byte(stripComments(code))
+	n := len(b)
+	for i := 0; i < n; {
+		if b[i] == '\'' || b[i] == '"' {
+			quote := b[i]
+			b[i] = ' '
+			i++
+			for i < n {
+				if b[i] == '\\' {
+					b[i] = ' '
+					if i+1 < n && b[i+1] != '\n' && b[i+1] != '\r' {
+						b[i+1] = ' '
+					}
+					i += 2
+					continue
+				}
+				if b[i] == quote {
+					b[i] = ' '
+					i++
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return string(b)
+}
+
 func findAssertingHelpers(src string) map[string]bool {
 	assertingHelpers := make(map[string]bool)
 	n := len(src)
@@ -560,20 +597,27 @@ func findAssertingHelpers(src string) map[string]bool {
 						closeBrace := parser.FindMatchingBrace(src, openBrace)
 						if closeBrace != -1 {
 							body := src[openBrace : closeBrace+1]
-							if isValidHelperName(name) && assertionRegex.MatchString(stripComments(body)) {
+							if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
 								assertingHelpers[name] = true
 							}
+							i = openBrace + 1
+							continue
 						}
 					} else if k+1 < n && src[k] == '=' && src[k+1] == '>' {
 						arrowStart := k + 2
 						semiIdx := findSemicolon(src, arrowStart)
 						if semiIdx != -1 {
 							body := src[arrowStart:semiIdx]
-							if isValidHelperName(name) && assertionRegex.MatchString(stripComments(body)) {
+							if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
 								assertingHelpers[name] = true
 							}
+							i = semiIdx + 1
+							continue
 						}
 					}
+					// Matched call span - skip over it to maintain linear time
+					i = parenClose + 1
+					continue
 				}
 			}
 			continue

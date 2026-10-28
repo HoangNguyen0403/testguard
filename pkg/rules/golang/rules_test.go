@@ -107,12 +107,15 @@ func TestTableDuplicateRule(t *testing.T) {
 		Name:      "TestCalculateTax",
 		FilePath:  "service/tax_test.go",
 		StartLine: 15,
-		RawBody: `
+		RawBody: `func TestCalculateTax(t *testing.T) {
 		tests := []struct{ in int; want int }{
 			{in: 100, want: 10},
 			{in: 100, want: 10}, // duplicate row!
 		}
-		`,
+		for _, tc := range tests {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	checker := golang.NewTableDuplicateRule()
@@ -197,7 +200,9 @@ func TestTableDuplicateRule_ShortDuplicateRowsDetected(t *testing.T) {
 		{0},
 		{0},
 	}
-	_ = tests
+	for _, tc := range tests {
+		t.Run("sub", func(t *testing.T) { _ = tc })
+	}
 }`,
 	}
 
@@ -218,7 +223,7 @@ func TestTableDuplicateRule_DistinctBoundaryValuesPreserved(t *testing.T) {
 		Name:      "TestBoundaryValues",
 		FilePath:  "service/calc_test.go",
 		StartLine: 1,
-		RawBody: `
+		RawBody: `func TestBoundaryValues(t *testing.T) {
 		tests := []struct{ in int; want int }{
 			{in: 0, want: 0},
 			{in: -1, want: 0},
@@ -226,7 +231,10 @@ func TestTableDuplicateRule_DistinctBoundaryValuesPreserved(t *testing.T) {
 			{in: 100, want: 10},
 			{in: 999999, want: 99999},
 		}
-		`,
+		for _, tc := range tests {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	violations := checker.Evaluate(unit)
@@ -247,7 +255,9 @@ func TestTableDuplicateRule_ExecutableDuplicateRowDetectedWithExactLine(t *testi
 		{in: 100, want: 10},
 		{in: 100, want: 10},
 	}
-	_ = tests
+	for _, tc := range tests {
+		t.Run("sub", func(t *testing.T) { _ = tc })
+	}
 }`,
 	}
 
@@ -301,16 +311,103 @@ func TestTableDuplicateRule_NamedRowTypeAmbiguityAccepted(t *testing.T) {
 		Name:      "TestNamedRows",
 		FilePath:  "service/named_test.go",
 		StartLine: 12,
-		RawBody: `
+		RawBody: `func TestNamedRows(t *testing.T) {
 		rows := []caseRow{{0}, {0}}
-		_ = rows
-		`,
+		for _, tc := range rows {
+			t.Run("sub", func(t *testing.T) { _ = tc })
+		}
+		}`,
 	}
 
 	violations := checker.Evaluate(unit)
 	if len(violations) != 1 {
 		t.Fatalf("expected 1 duplicate row violation for named row type, got %d", len(violations))
 	}
+}
+
+func TestTableDuplicateRule_Addendum2(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+
+	t.Run("dedup-input fixture slice -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestDedupInputs",
+			FilePath:  "service/dedup_test.go",
+			StartLine: 10,
+			RawBody: `func TestDedupInputs(t *testing.T) {
+				inputs := []struct{ ID int }{{ID: 1}, {ID: 1}}
+				_ = inputs
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for dedup-input fixture slice, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("mock Return slice with duplicate elements -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestMockReturnSlice",
+			FilePath:  "service/repo_test.go",
+			StartLine: 10,
+			RawBody: `func TestMockReturnSlice(t *testing.T) {
+				mock.EXPECT().Find().Return([]struct{ Code string }{{Code: "A"}, {Code: "A"}})
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for mock Return slice, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("ranged t.Run table with two rows identical except name -> 1", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestRangedTableDuplicate",
+			FilePath:  "service/calc_test.go",
+			StartLine: 10,
+			RawBody: `func TestRangedTableDuplicate(t *testing.T) {
+				tests := []struct {
+					name string
+					in   int
+					want int
+				}{
+					{name: "first case", in: 10, want: 20},
+					{name: "second case", in: 10, want: 20},
+				}
+				for _, tc := range tests {
+					t.Run(tc.name, func(t *testing.T) {
+						if tc.in * 2 != tc.want { t.Fatal("fail") }
+					})
+				}
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 1 {
+			t.Fatalf("expected 1 violation for identical rows except name, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("ranged table with rows differing in want -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestRangedTableDistinct",
+			FilePath:  "service/calc_test.go",
+			StartLine: 10,
+			RawBody: `func TestRangedTableDistinct(t *testing.T) {
+				tests := []struct {
+					name string
+					in   int
+					want int
+				}{
+					{name: "first case", in: 10, want: 20},
+					{name: "second case", in: 10, want: 30},
+				}
+				for _, tc := range tests {
+					t.Run(tc.name, func(t *testing.T) {
+						if tc.in * 2 != tc.want { t.Fatal("fail") }
+					})
+				}
+			}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations for rows differing in want, got %d: %+v", len(v), v)
+		}
+	})
 }
 
 func TestDomainPurityRule_RealPackageCallSurvivesLaterShadow(t *testing.T) {

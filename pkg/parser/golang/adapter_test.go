@@ -737,7 +737,13 @@ func (m *MockObj) EXPECT() *MockObj { return m }
 func (m *MockObj) Get() *MockObj { return m }
 func (m *MockObj) Return(x int) {}
 
-func TestGomock(t *testing.T) {
+func TestGomockProvenanced(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	m := NewMockObj(ctrl)
+	m.EXPECT().Get().Return(1)
+}
+
+func TestGomockUnrelated(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	_ = ctrl
 	var m MockObj
@@ -747,7 +753,7 @@ func TestGomock(t *testing.T) {
 type SqlmockObj struct{}
 func (s *SqlmockObj) ExpectationsWereMet() error { return nil }
 
- func TestSqlmock(t *testing.T) {
+func TestSqlmockDiscarded(t *testing.T) {
 	var mock SqlmockObj
 	_ = mock.ExpectationsWereMet()
 }
@@ -761,20 +767,28 @@ func (s *SqlmockObj) ExpectationsWereMet() error { return nil }
 		unitMap[u.Name] = u
 	}
 
-	u1, ok := unitMap["TestGomock"]
+	u1, ok := unitMap["TestGomockProvenanced"]
 	if !ok {
-		t.Fatalf("expected TestGomock")
+		t.Fatalf("expected TestGomockProvenanced")
 	}
 	if len(u1.Assertions) == 0 {
-		t.Errorf("expected TestGomock to have non-empty assertions")
+		t.Errorf("expected TestGomockProvenanced to have assertions")
 	}
 
-	u2, ok := unitMap["TestSqlmock"]
+	u2, ok := unitMap["TestGomockUnrelated"]
 	if !ok {
-		t.Fatalf("expected TestSqlmock")
+		t.Fatalf("expected TestGomockUnrelated")
 	}
-	if len(u2.Assertions) == 0 {
-		t.Errorf("expected TestSqlmock to have non-empty assertions")
+	if len(u2.Assertions) != 0 {
+		t.Errorf("expected TestGomockUnrelated to have 0 assertions, got %v", u2.Assertions)
+	}
+
+	u3, ok := unitMap["TestSqlmockDiscarded"]
+	if !ok {
+		t.Fatalf("expected TestSqlmockDiscarded")
+	}
+	if len(u3.Assertions) != 0 {
+		t.Errorf("expected TestSqlmockDiscarded to have 0 assertions, got %v", u3.Assertions)
 	}
 }
 
@@ -930,5 +944,164 @@ func TestControllerWithoutEXPECT(t *testing.T) {
 	u2 := unitMap["TestControllerWithoutEXPECT"]
 	if len(u2.Assertions) != 0 {
 		t.Errorf("expected 0 assertions for NewController without EXPECT, got %v", u2.Assertions)
+	}
+}
+func TestG1_SuiteReceiverHelpers(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"github.com/stretchr/testify/suite"
+	"testing"
+)
+
+type MySuite struct {
+	suite.Suite
+}
+
+func (s *MySuite) assertSomething() {
+	s.True(true)
+}
+
+func (s *MySuite) TestWithHelper() {
+	s.assertSomething()
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_helper_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "helper:assertSomething" {
+		t.Errorf("expected [helper:assertSomething], got %v", units[0].Assertions)
+	}
+}
+
+func TestG2_SuiteAssertionMethodsAndSubtests(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"github.com/stretchr/testify/suite"
+	"testing"
+)
+
+type MySuite struct {
+	suite.Suite
+}
+
+func (s *MySuite) TestAssertions() {
+	s.ElementsMatch([]int{1}, []int{1})
+	s.JSONEq("{}", "{}")
+	s.T().Run("sub", func(t *testing.T) {
+		s.WithinDuration(time.Now(), time.Now(), 0)
+	})
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_assertions_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) < 3 {
+		t.Errorf("expected at least 3 assertions, got %v", units[0].Assertions)
+	}
+}
+
+func TestG3_SuiteLifecycleGomock(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
+	"testing"
+)
+
+type MockRepo struct{}
+func (m *MockRepo) EXPECT() *MockRepo { return m }
+
+type MySuite struct {
+	suite.Suite
+	repo MockRepo
+}
+
+func (s *MySuite) SetupTest() {
+	_ = gomock.NewController(s.T())
+}
+
+func (s *MySuite) TestRepo() {
+	s.repo.EXPECT()
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_gomock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "verify:gomock" {
+		t.Errorf("expected [verify:gomock], got %v", units[0].Assertions)
+	}
+}
+
+func TestG4_CrossFileMockFactory(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+type Mocks struct {
+	db MockDB
+}
+type MockDB struct{}
+func (m *MockDB) EXPECT() *MockDB { return m }
+
+func TestWithFactory(t *testing.T) {
+	m := newExternalMocks(t, "arg")
+	m.db.EXPECT()
+}
+`)
+	units, err := adapter.LocateTests(source, "factory_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "verify:gomock" {
+		t.Errorf("expected [verify:gomock], got %v", units[0].Assertions)
+	}
+}
+
+func TestG5_SubtestDelegation(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func localAssertingSubtest(t *testing.T) {
+	if false { t.Fatal("fail") }
+}
+
+func TestSubtestDelegation(t *testing.T) {
+	t.Run("same-file", localAssertingSubtest)
+	t.Run("cross-file", externalSubtest)
+}
+`)
+	units, err := adapter.LocateTests(source, "subtest_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 2 {
+		t.Errorf("expected 2 helper assertions, got %v", units[0].Assertions)
 	}
 }

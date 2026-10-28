@@ -762,8 +762,9 @@ func TestExecutableServiceSqlmock(t *testing.T) {
         {in: 100, want: 10},
         {in: 100, want: 10},
     }
-    _ = tests
-    t.Fatal("fail")
+    for _, tc := range tests {
+        t.Run("sub", func(t *testing.T) { _ = tc })
+    }
 }
 `)
 	_ = os.WriteFile(serviceExecFile, serviceExecContent, 0644)
@@ -797,7 +798,7 @@ func TestExecutableServiceSqlmock(t *testing.T) {
 		t.Errorf("expected GUARD-GO-03 to be detected in executable table test")
 	}
 
-	// 3. Scan pkg/rules/golang/rules_test.go directly: must produce ZERO GUARD-GO-02 or GUARD-GO-03 false positives
+	// 3. Scan pkg/rules/golang/rules_test.go directly: must produce ZERO GUARD-GO-03 false positives
 	resRulesTest, err := eng.Run(engine.Options{
 		TargetPaths: []string{"pkg/rules/golang/rules_test.go"},
 	})

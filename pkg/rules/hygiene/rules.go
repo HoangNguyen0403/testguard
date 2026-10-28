@@ -1,7 +1,12 @@
 package hygiene
 
 import (
+	"bytes"
 	"fmt"
+	"go/ast"
+	"go/format"
+	goparser "go/parser"
+	"go/token"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -49,6 +54,12 @@ func isLiteral(s string) bool {
 		return true
 	}
 	if stringRegex.MatchString(s) {
+		if strings.HasPrefix(s, "`") && strings.Contains(s, "${") {
+			return false
+		}
+		if (strings.HasPrefix(s, "'") || strings.HasPrefix(s, `"`)) && strings.Contains(s, "$") {
+			return false
+		}
 		return true
 	}
 	return false
@@ -76,6 +87,147 @@ func isGoFile(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".go")
 }
 
+type stringRange struct {
+	start int
+	end   int
+}
+
+func blankCommentsAndFindStrings(src string, isTS bool) (string, []stringRange) {
+	b := []byte(src)
+	n := len(b)
+	var strRanges []stringRange
+	i := 0
+	for i < n {
+		if i+1 < n && b[i] == '/' && b[i+1] == '/' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n && b[i] != '\n' {
+				if b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if i+1 < n && b[i] == '/' && b[i+1] == '*' {
+			b[i] = ' '
+			b[i+1] = ' '
+			i += 2
+			for i < n {
+				if i+1 < n && b[i] == '*' && b[i+1] == '/' {
+					b[i] = ' '
+					b[i+1] = ' '
+					i += 2
+					break
+				}
+				if b[i] != '\n' && b[i] != '\r' {
+					b[i] = ' '
+				}
+				i++
+			}
+			continue
+		}
+		if !isTS && i+2 < n && ((b[i] == '\'' && b[i+1] == '\'' && b[i+2] == '\'') || (b[i] == '"' && b[i+1] == '"' && b[i+2] == '"')) {
+			delim := b[i]
+			start := i
+			i += 3
+			for i+2 < n {
+				if b[i] == '\\' {
+					i += 2
+					continue
+				}
+				if b[i] == delim && b[i+1] == delim && b[i+2] == delim {
+					i += 3
+					break
+				}
+				i++
+			}
+			strRanges = append(strRanges, stringRange{start: start, end: i})
+			continue
+		}
+		if !isTS && (b[i] == 'r' || b[i] == 'R') && i+1 < n && (b[i+1] == '\'' || b[i+1] == '"') {
+			delim := b[i+1]
+			start := i
+			i += 2
+			for i < n && b[i] != delim && b[i] != '\n' {
+				i++
+			}
+			if i < n && b[i] == delim {
+				i++
+			}
+			strRanges = append(strRanges, stringRange{start: start, end: i})
+			continue
+		}
+		if b[i] == '\'' || b[i] == '"' || (isTS && b[i] == '`') {
+			delim := b[i]
+			start := i
+			i++
+			for i < n {
+				if b[i] == '\\' {
+					i += 2
+					continue
+				}
+				if b[i] == delim {
+					i++
+					break
+				}
+				if (delim == '\'' || delim == '"') && b[i] == '\n' {
+					break
+				}
+				i++
+			}
+			strRanges = append(strRanges, stringRange{start: start, end: i})
+			continue
+		}
+		i++
+	}
+	return string(b), strRanges
+}
+
+func inStringRange(idx int, ranges []stringRange) bool {
+	for _, r := range ranges {
+		if idx >= r.start && idx < r.end {
+			return true
+		}
+	}
+	return false
+}
+
+func isIdentTrue(e ast.Expr) bool {
+	if ident, ok := e.(*ast.Ident); ok {
+		return ident.Name == "true"
+	}
+	return false
+}
+
+func isIdentFalse(e ast.Expr) bool {
+	if ident, ok := e.(*ast.Ident); ok {
+		return ident.Name == "false"
+	}
+	return false
+}
+
+func isSameGoLiteral(a, b ast.Expr) bool {
+	switch va := a.(type) {
+	case *ast.BasicLit:
+		if vb, ok := b.(*ast.BasicLit); ok {
+			return va.Kind == vb.Kind && va.Value == vb.Value
+		}
+	case *ast.Ident:
+		if vb, ok := b.(*ast.Ident); ok {
+			if (va.Name == "true" || va.Name == "false" || va.Name == "nil") && va.Name == vb.Name {
+				return true
+			}
+		}
+	case *ast.UnaryExpr:
+		if vb, ok := b.(*ast.UnaryExpr); ok {
+			return va.Op == vb.Op && isSameGoLiteral(va.X, vb.X)
+		}
+	}
+	return false
+}
+
 type tautologyMatch struct {
 	index int
 }
@@ -95,62 +247,142 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var matches []tautologyMatch
 
 	if isTSFile(unit.FilePath) {
-		for _, loc := range tsTruthyTautology.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, true)
+		for _, loc := range tsTruthyTautology.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
 		}
-		for _, loc := range tsFalsyTautology.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
+		for _, loc := range tsFalsyTautology.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
 		}
-		for _, loc := range tsExpectSameRegex.FindAllStringSubmatchIndex(body, -1) {
-			if len(loc) >= 6 {
-				l := body[loc[2]:loc[3]]
-				r := body[loc[4]:loc[5]]
+		for _, loc := range tsExpectSameRegex.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
 				if isSameLiteral(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
 		}
 	} else if isDartFile(unit.FilePath) {
-		for _, loc := range dartTrueIsTrue.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, false)
+		for _, loc := range dartTrueIsTrue.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
 		}
-		for _, loc := range dartFalseIsFalse.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
+		for _, loc := range dartFalseIsFalse.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
 		}
-		for _, loc := range dartEqualsTaut.FindAllStringSubmatchIndex(body, -1) {
-			if len(loc) >= 6 {
-				l := body[loc[2]:loc[3]]
-				r := body[loc[4]:loc[5]]
+		for _, loc := range dartEqualsTaut.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
 				if isSameLiteral(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
 		}
-		for _, loc := range dartExpectSame.FindAllStringSubmatchIndex(body, -1) {
-			if len(loc) >= 6 {
-				l := body[loc[2]:loc[3]]
-				r := body[loc[4]:loc[5]]
+		for _, loc := range dartExpectSame.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
 				if isSameLiteral(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
 		}
 	} else if isGoFile(unit.FilePath) {
-		for _, loc := range goTrueTautology.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
+		var fdecl *ast.FuncDecl
+		var fset *token.FileSet
+		if d, ok := unit.ASTDecl.(*ast.FuncDecl); ok && d != nil {
+			fdecl = d
+			if fs, ok := unit.FileSet.(*token.FileSet); ok {
+				fset = fs
+			}
 		}
-		for _, loc := range goFalseTautology.FindAllStringIndex(body, -1) {
-			matches = append(matches, tautologyMatch{index: loc[0]})
-		}
-		for _, loc := range goEqualSame.FindAllStringSubmatchIndex(body, -1) {
-			if len(loc) >= 6 {
-				l := body[loc[2]:loc[3]]
-				r := body[loc[4]:loc[5]]
-				if isSameLiteral(l, r) {
-					matches = append(matches, tautologyMatch{index: loc[0]})
+		if fdecl == nil {
+			fs := token.NewFileSet()
+			src := "package p\nfunc TestUnit() {\n" + unit.RawBody + "\n}"
+			f, err := goparser.ParseFile(fs, unit.FilePath, src, 0)
+			if err == nil && len(f.Decls) > 0 {
+				if fd, ok := f.Decls[0].(*ast.FuncDecl); ok {
+					fdecl = fd
+					fset = fs
 				}
 			}
 		}
+		if fdecl != nil && fset != nil {
+			var goMatches []int
+			ast.Inspect(fdecl, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkgIdent, ok := sel.X.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				pkgName := pkgIdent.Name
+				if pkgName != "assert" && pkgName != "require" {
+					return true
+				}
+				fnName := sel.Sel.Name
+				switch fnName {
+				case "True":
+					if len(call.Args) >= 2 {
+						if isIdentTrue(call.Args[1]) {
+							goMatches = append(goMatches, int(call.Pos()))
+						}
+					}
+				case "False":
+					if len(call.Args) >= 2 {
+						if isIdentFalse(call.Args[1]) {
+							goMatches = append(goMatches, int(call.Pos()))
+						}
+					}
+				case "Equal", "EqualValues", "Equalf", "EqualValuesf":
+					if len(call.Args) >= 3 {
+						if isSameGoLiteral(call.Args[1], call.Args[2]) {
+							goMatches = append(goMatches, int(call.Pos()))
+						}
+					}
+				}
+				return true
+			})
+			if len(goMatches) > 0 {
+				pos := fset.Position(token.Pos(goMatches[0]))
+				line := pos.Line
+				if unit.ASTDecl == nil {
+					line = unit.StartLine + (pos.Line - 3)
+				}
+				if line <= 0 {
+					line = unit.StartLine
+				}
+				return []models.Violation{
+					{
+						RuleID:     "GUARD-UNIV-TAUTOLOGY",
+						Severity:   models.SeverityBlocker,
+						FilePath:   unit.FilePath,
+						LineNumber: line,
+						Column:     1,
+						Message:    fmt.Sprintf("Tautological assertion in '%s': assertion will always pass vacuously.", unit.Name),
+						Suggestion: "Assert actual behavior or state produced by the system under test rather than comparing literals to themselves.",
+					},
+				}
+			}
+			return nil
+		}
+		return nil
 	} else {
 		return nil
 	}
@@ -290,9 +522,45 @@ func (r *SkipRule) checkTSSkips(filePath string, src string) []models.Violation 
 	return violations
 }
 
+func findEnclosingCallName(blanked string, pos int) string {
+	parenDepth := 0
+	for i := pos - 1; i >= 0; i-- {
+		c := blanked[i]
+		if c == ')' {
+			parenDepth++
+		} else if c == '(' {
+			if parenDepth > 0 {
+				parenDepth--
+			} else {
+				j := i - 1
+				for j >= 0 && (blanked[j] == ' ' || blanked[j] == '\t' || blanked[j] == '\r' || blanked[j] == '\n') {
+					j--
+				}
+				if j >= 0 && isIdentPart(blanked[j]) {
+					endIdent := j + 1
+					for j >= 0 && isIdentPart(blanked[j]) {
+						j--
+					}
+					return blanked[j+1 : endIdent]
+				}
+				return ""
+			}
+		}
+	}
+	return ""
+}
+
+var dartSkipCallNames = map[string]bool{
+	"test":        true,
+	"testWidgets": true,
+	"group":       true,
+	"blocTest":    true,
+}
+
 func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violation {
 	var violations []models.Violation
-	n := len(src)
+	cleanSrc, _ := blankCommentsAndFindStrings(src, false)
+	n := len(cleanSrc)
 	line := 1
 
 	for i := 0; i < n; {
@@ -302,102 +570,12 @@ func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violatio
 			continue
 		}
 
-		// Single-line comment
-		if i+1 < n && src[i] == '/' && src[i+1] == '/' {
-			i += 2
-			for i < n && src[i] != '\n' {
-				i++
-			}
-			continue
-		}
-
-		// Multi-line block comment
-		if i+1 < n && src[i] == '/' && src[i+1] == '*' {
-			i += 2
-			for i+1 < n && !(src[i] == '*' && src[i+1] == '/') {
-				if src[i] == '\n' {
-					line++
-				}
-				i++
-			}
-			i += 2
-			continue
-		}
-
-		// Raw string literal: r'...' or r"..."
-		if (src[i] == 'r' || src[i] == 'R') && i+1 < n && (src[i+1] == '\'' || src[i+1] == '"') {
-			quote := src[i+1]
-			if i+3 < n && src[i+2] == quote && src[i+3] == quote {
-				i += 4
-				for i+2 < n && !(src[i] == quote && src[i+1] == quote && src[i+2] == quote) {
-					if src[i] == '\n' {
-						line++
-					}
-					i++
-				}
-				i += 3
-				continue
-			}
-			i += 2
-			for i < n && src[i] != quote && src[i] != '\n' {
-				i++
-			}
-			if i < n && src[i] == quote {
-				i++
-			}
-			continue
-		}
-
-		// Triple-quoted multi-line string literal: """...""" or '''...'''
-		if (src[i] == '\'' || src[i] == '"') && i+2 < n && src[i+1] == src[i] && src[i+2] == src[i] {
-			quote := src[i]
-			i += 3
-			for i+2 < n {
-				if src[i] == '\\' {
-					if src[i+1] == '\n' {
-						line++
-					}
-					i += 2
-					continue
-				}
-				if src[i] == '\n' {
-					line++
-				}
-				if src[i] == quote && src[i+1] == quote && src[i+2] == quote {
-					i += 3
-					break
-				}
-				i++
-			}
-			continue
-		}
-
-		// Standard quoted string literal: "..." or '...'
-		if src[i] == '\'' || src[i] == '"' {
-			quote := src[i]
+		if cleanSrc[i] == ' ' || cleanSrc[i] == '\t' || cleanSrc[i] == '\r' {
 			i++
-			for i < n && src[i] != quote {
-				if src[i] == '\\' {
-					if i+1 < n && src[i+1] == '\n' {
-						line++
-					}
-					i += 2
-					continue
-				}
-				if src[i] == '\n' {
-					line++
-					break
-				}
-				i++
-			}
-			if i < n && src[i] == quote {
-				i++
-			}
 			continue
 		}
 
-		// Check for Dart skip pattern outside strings and comments
-		if i == 0 || !isIdentPart(src[i-1]) {
+		if i == 0 || !isIdentPart(cleanSrc[i-1]) {
 			rem := src[i:]
 			var snippet string
 			if match := dartSkipTrue.FindString(rem); match != "" {
@@ -407,17 +585,20 @@ func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violatio
 			}
 
 			if snippet != "" {
-				violations = append(violations, models.Violation{
-					RuleID:     "GUARD-UNIV-SKIP",
-					Severity:   models.SeverityWarning,
-					FilePath:   filePath,
-					LineNumber: line,
-					Column:     1,
-					Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", snippet),
-					Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
-				})
-				i += len(snippet)
-				continue
+				enclosingCall := findEnclosingCallName(cleanSrc, i)
+				if dartSkipCallNames[enclosingCall] {
+					violations = append(violations, models.Violation{
+						RuleID:     "GUARD-UNIV-SKIP",
+						Severity:   models.SeverityWarning,
+						FilePath:   filePath,
+						LineNumber: line,
+						Column:     1,
+						Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", snippet),
+						Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+					})
+					i += len(snippet)
+					continue
+				}
 			}
 		}
 
@@ -429,132 +610,76 @@ func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violatio
 
 func (r *SkipRule) checkGoSkips(filePath string, src string) []models.Violation {
 	var violations []models.Violation
-	lines := strings.Split(src, "\n")
+	fset := token.NewFileSet()
+	fileAST, err := goparser.ParseFile(fset, filePath, src, 0)
+	if err != nil {
+		return nil
+	}
 
-	inBlockComment := false
-	inTestFunc := false
-	lookingForFirstStmt := false
-	var currentParam string
-
-	for lineIdx, line := range lines {
-		lineNum := lineIdx + 1
-		trimmed := strings.TrimSpace(line)
-
-		// Handle block comments across lines
-		if inBlockComment {
-			if endIdx := strings.Index(trimmed, "*/"); endIdx != -1 {
-				inBlockComment = false
-				trimmed = strings.TrimSpace(trimmed[endIdx+2:])
-			} else {
-				continue
-			}
+	for _, decl := range fileAST.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name == nil || fn.Body == nil || len(fn.Body.List) == 0 {
+			continue
 		}
-
-		// Strip single line comments and inline block comments
-		for {
-			startIdx := strings.Index(trimmed, "/*")
-			endIdx := strings.Index(trimmed, "*/")
-			if startIdx != -1 && endIdx != -1 && endIdx > startIdx {
-				trimmed = strings.TrimSpace(trimmed[:startIdx] + " " + trimmed[endIdx+2:])
-			} else if startIdx != -1 {
-				inBlockComment = true
-				trimmed = strings.TrimSpace(trimmed[:startIdx])
-				break
-			} else {
+		if !strings.HasPrefix(fn.Name.Name, "Test") && !strings.HasPrefix(fn.Name.Name, "Benchmark") {
+			continue
+		}
+		if fn.Type.Params == nil || len(fn.Type.Params.List) == 0 {
+			continue
+		}
+		var testingParamObj *ast.Object
+		for _, field := range fn.Type.Params.List {
+			for _, name := range field.Names {
+				if name.Obj != nil {
+					testingParamObj = name.Obj
+					break
+				}
+			}
+			if testingParamObj != nil {
 				break
 			}
 		}
-
-		if commentIdx := strings.Index(trimmed, "//"); commentIdx != -1 {
-			trimmed = strings.TrimSpace(trimmed[:commentIdx])
-		}
-
-		if trimmed == "" {
+		if testingParamObj == nil {
 			continue
 		}
 
-		if !inTestFunc {
-			if m := goTestFuncRe.FindStringSubmatch(line); len(m) > 1 {
-				currentParam = m[1]
-				inTestFunc = true
-				if braceIdx := strings.Index(trimmed, "{"); braceIdx != -1 {
-					afterBrace := strings.TrimSpace(trimmed[braceIdx+1:])
-					if afterBrace != "" && afterBrace != "}" {
-						// Statement on the same line as opening brace
-						skipPattern := fmt.Sprintf(`^(?:%s\.(?:Skip|Skipf|SkipNow)|\w+\.(?:Skip|Skipf|SkipNow))\s*\(`, regexp.QuoteMeta(currentParam))
-						skipRegex := regexp.MustCompile(skipPattern)
-						if skipRegex.MatchString(afterBrace) {
-							snippet := afterBrace
-							if semiIdx := strings.Index(snippet, ";"); semiIdx != -1 {
-								snippet = snippet[:semiIdx]
-							}
-							violations = append(violations, models.Violation{
-								RuleID:     "GUARD-UNIV-SKIP",
-								Severity:   models.SeverityWarning,
-								FilePath:   filePath,
-								LineNumber: lineNum,
-								Column:     1,
-								Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", strings.TrimSpace(snippet)),
-								Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
-							})
-						}
-						inTestFunc = false
-						lookingForFirstStmt = false
-						continue
-					}
-					lookingForFirstStmt = true
-				}
-			}
-		} else if !lookingForFirstStmt {
-			if braceIdx := strings.Index(trimmed, "{"); braceIdx != -1 {
-				afterBrace := strings.TrimSpace(trimmed[braceIdx+1:])
-				if afterBrace != "" && afterBrace != "}" {
-					skipPattern := fmt.Sprintf(`^(?:%s\.(?:Skip|Skipf|SkipNow)|\w+\.(?:Skip|Skipf|SkipNow))\s*\(`, regexp.QuoteMeta(currentParam))
-					skipRegex := regexp.MustCompile(skipPattern)
-					if skipRegex.MatchString(afterBrace) {
-						snippet := afterBrace
-						if semiIdx := strings.Index(snippet, ";"); semiIdx != -1 {
-							snippet = snippet[:semiIdx]
-						}
-						violations = append(violations, models.Violation{
-							RuleID:     "GUARD-UNIV-SKIP",
-							Severity:   models.SeverityWarning,
-							FilePath:   filePath,
-							LineNumber: lineNum,
-							Column:     1,
-							Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", strings.TrimSpace(snippet)),
-							Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
-						})
-					}
-					inTestFunc = false
-					lookingForFirstStmt = false
-					continue
-				}
-				lookingForFirstStmt = true
-			}
-		} else {
-			// First non-blank, non-comment statement in test body
-			skipPattern := fmt.Sprintf(`^(?:%s\.(?:Skip|Skipf|SkipNow)|\w+\.(?:Skip|Skipf|SkipNow))\s*\(`, regexp.QuoteMeta(currentParam))
-			skipRegex := regexp.MustCompile(skipPattern)
-			if skipRegex.MatchString(trimmed) {
-				snippet := trimmed
-				if semiIdx := strings.Index(snippet, ";"); semiIdx != -1 {
-					snippet = snippet[:semiIdx]
-				}
-				violations = append(violations, models.Violation{
-					RuleID:     "GUARD-UNIV-SKIP",
-					Severity:   models.SeverityWarning,
-					FilePath:   filePath,
-					LineNumber: lineNum,
-					Column:     1,
-					Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", strings.TrimSpace(snippet)),
-					Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
-				})
-			}
-			inTestFunc = false
-			lookingForFirstStmt = false
+		firstStmt := fn.Body.List[0]
+		exprStmt, ok := firstStmt.(*ast.ExprStmt)
+		if !ok {
+			continue
 		}
-	}
+		call, ok := exprStmt.X.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		methodName := sel.Sel.Name
+		if methodName != "Skip" && methodName != "Skipf" && methodName != "SkipNow" {
+			continue
+		}
+		recvIdent, ok := sel.X.(*ast.Ident)
+		if !ok || recvIdent.Obj != testingParamObj {
+			continue
+		}
 
+		pos := fset.Position(call.Pos())
+		snippet := fmt.Sprintf("%s.%s(...)", recvIdent.Name, methodName)
+		var buf bytes.Buffer
+		if err := format.Node(&buf, fset, call); err == nil {
+			snippet = buf.String()
+		}
+		violations = append(violations, models.Violation{
+			RuleID:     "GUARD-UNIV-SKIP",
+			Severity:   models.SeverityWarning,
+			FilePath:   filePath,
+			LineNumber: pos.Line,
+			Column:     1,
+			Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", snippet),
+			Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+		})
+	}
 	return violations
 }

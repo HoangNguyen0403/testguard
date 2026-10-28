@@ -278,32 +278,168 @@ func isTableComposite(compLit *ast.CompositeLit) bool {
 	return true
 }
 
+func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.CompositeLit) (string, string) {
+	var rowLit *ast.CompositeLit
+	switch e := elt.(type) {
+	case *ast.CompositeLit:
+		rowLit = e
+	case *ast.UnaryExpr:
+		if e.Op == token.AND {
+			if cl, ok := e.X.(*ast.CompositeLit); ok {
+				rowLit = cl
+			}
+		}
+	}
+	if rowLit == nil {
+		var buf bytes.Buffer
+		_ = format.Node(&buf, fset, elt)
+		raw := strings.TrimSpace(buf.String())
+		return raw, raw
+	}
+
+	var fullBuf bytes.Buffer
+	_ = format.Node(&fullBuf, fset, elt)
+	fullContent := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(fullBuf.String()), "{"), "}"))
+
+	nameFieldIndex := -1
+	if compLit != nil {
+		if arrType, ok := compLit.Type.(*ast.ArrayType); ok {
+			if st, ok := arrType.Elt.(*ast.StructType); ok && st.Fields != nil {
+				fieldIdx := 0
+				for _, field := range st.Fields.List {
+					if len(field.Names) == 0 {
+						fieldIdx++
+					} else {
+						for _, name := range field.Names {
+							low := strings.ToLower(name.Name)
+							if low == "name" || low == "desc" || low == "description" || low == "title" {
+								nameFieldIndex = fieldIdx
+							}
+							fieldIdx++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	var parts []string
+	for idx, f := range rowLit.Elts {
+		if kv, ok := f.(*ast.KeyValueExpr); ok {
+			if kIdent, ok := kv.Key.(*ast.Ident); ok {
+				low := strings.ToLower(kIdent.Name)
+				if low == "name" || low == "desc" || low == "description" || low == "title" {
+					continue
+				}
+			}
+			var buf bytes.Buffer
+			_ = format.Node(&buf, fset, kv)
+			parts = append(parts, buf.String())
+		} else {
+			if nameFieldIndex != -1 && idx == nameFieldIndex {
+				continue
+			} else if nameFieldIndex == -1 && idx == 0 {
+				if bl, ok := f.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+					continue
+				}
+			}
+			var buf bytes.Buffer
+			_ = format.Node(&buf, fset, f)
+			parts = append(parts, buf.String())
+		}
+	}
+	return strings.Join(parts, ", "), fullContent
+}
+
 func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var violations []models.Violation
 
 	fset, fn, err := getUnitAST(unit)
-	if err != nil {
+	if err != nil || fn.Body == nil {
 		return violations
 	}
 
-	ast.Inspect(fn, func(n ast.Node) bool {
-		compLit, ok := n.(*ast.CompositeLit)
-		if !ok || !isTableComposite(compLit) {
+	assignedTables := make(map[string]*ast.CompositeLit)
+	for _, stmt := range fn.Body.List {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range s.Lhs {
+				if ident, ok := lhs.(*ast.Ident); ok && i < len(s.Rhs) {
+					if compLit, ok := s.Rhs[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
+						assignedTables[ident.Name] = compLit
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			if gen, ok := s.Decl.(*ast.GenDecl); ok && gen.Tok == token.VAR {
+				for _, spec := range gen.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						for i, name := range vs.Names {
+							if i < len(vs.Values) {
+								if compLit, ok := vs.Values[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
+									assignedTables[name.Name] = compLit
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(assignedTables) == 0 {
+		return violations
+	}
+
+	validTables := make(map[*ast.CompositeLit]bool)
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok {
 			return true
 		}
+		ident, ok := rng.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		compLit, exists := assignedTables[ident.Name]
+		if !exists {
+			return true
+		}
+		hasRunCall := false
+		ast.Inspect(rng.Body, func(bn ast.Node) bool {
+			call, ok := bn.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if sel.Sel.Name == "Run" {
+				hasRunCall = true
+				return false
+			}
+			return true
+		})
+		if hasRunCall {
+			validTables[compLit] = true
+		}
+		return true
+	})
 
-		// Table boundaries are isolated per composite literal
+	if len(validTables) == 0 {
+		return violations
+	}
+
+	for compLit := range validTables {
 		seenRows := make(map[string]bool)
 		for _, elt := range compLit.Elts {
-			var buf bytes.Buffer
-			if err := format.Node(&buf, fset, elt); err != nil {
+			normalizedKey, fullContent := normalizeRowContent(fset, elt, compLit)
+			if normalizedKey == "" {
 				continue
 			}
-			rawContent := strings.TrimSpace(buf.String())
-			// Strip outer braces if present for clean reporting
-			trimmedContent := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(rawContent, "{"), "}"))
 
-			if seenRows[trimmedContent] {
+			if seenRows[normalizedKey] {
 				line, col := getNodeLineAndColumn(fset, elt, unit)
 				violations = append(violations, models.Violation{
 					RuleID:     "GUARD-GO-03",
@@ -311,17 +447,14 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 					FilePath:   unit.FilePath,
 					LineNumber: line,
 					Column:     col,
-					Message:    fmt.Sprintf("Duplicate table test row in '%s': row {%s} is duplicated.", unit.Name, trimmedContent),
+					Message:    fmt.Sprintf("Duplicate table test row in '%s': row {%s} is duplicated.", unit.Name, fullContent),
 					Suggestion: "Ensure each table test case tests a distinct equivalence class, boundary condition, or error scenario.",
 				})
-				// One duplicate row reported per table literal is sufficient
 				break
 			}
-			seenRows[trimmedContent] = true
+			seenRows[normalizedKey] = true
 		}
-
-		return true
-	})
+	}
 
 	return violations
 }

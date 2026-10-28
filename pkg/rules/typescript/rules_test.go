@@ -187,6 +187,51 @@ func TestReactSleepRule_EvaluateFile(t *testing.T) {
 			expectedSeverity:   models.SeverityWarning,
 			expectedDelay:      "DEBOUNCE_MS",
 		},
+		{
+			name:    "negative delay is ignored",
+			fileSrc: "describe('test', () => { it('clamped', () => { setTimeout(r, -1); }); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "clamped",
+					FilePath:  "components/UserProfile.test.tsx",
+					StartLine: 70,
+					Kind:      "unit",
+					RawBody:   "setTimeout(r, -1);\nexpect(true).toBe(true);",
+				},
+			},
+			expectedViolations: 0,
+		},
+		{
+			name:    "undefined delay is ignored",
+			fileSrc: "describe('test', () => { it('undef', () => { setTimeout(r, undefined); }); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "undef",
+					FilePath:  "components/UserProfile.test.tsx",
+					StartLine: 80,
+					Kind:      "unit",
+					RawBody:   "setTimeout(r, undefined);\nexpect(true).toBe(true);",
+				},
+			},
+			expectedViolations: 0,
+		},
+		{
+			name:    "commented fake timers does not suppress real sleep",
+			fileSrc: "// jest.useFakeTimers();\ndescribe('test', () => { it('waits', async () => { await new Promise(r => setTimeout(r, 100)); }); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "waits",
+					FilePath:  "components/UserProfile.test.tsx",
+					StartLine: 90,
+					Kind:      "unit",
+					RawBody:   "await new Promise(r => setTimeout(r, 100));\nexpect(true).toBe(true);",
+				},
+			},
+			expectedViolations: 1,
+			expectedLine:       90,
+			expectedSeverity:   models.SeverityWarning,
+			expectedDelay:      "100",
+		},
 	}
 
 	checker := typescript.NewReactSleepRule()

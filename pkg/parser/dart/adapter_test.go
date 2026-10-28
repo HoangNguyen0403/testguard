@@ -3,6 +3,7 @@ package dart_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 )
@@ -62,6 +63,25 @@ void main() {
 	}
 	if len(simpleTest.Assertions) == 0 {
 		t.Errorf("expected simple test to have assertions detected")
+	}
+}
+func TestDartAdapter_32kNestedCallsPerformance(t *testing.T) {
+	n := 32000
+	src := "void main() {" + strings.Repeat("f(", n) + "0" + strings.Repeat(")", n) + ";}"
+	adapter := dart.NewAdapter()
+
+	start := time.Now()
+	units, err := adapter.LocateTests([]byte(src), "stress_test.dart")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("expected 0 units, got %d", len(units))
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected 32k nested calls to process in under 1s, took %v", elapsed)
 	}
 }
 
