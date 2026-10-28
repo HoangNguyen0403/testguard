@@ -85,6 +85,26 @@ func TestDartAdapter_32kNestedCallsPerformance(t *testing.T) {
 	}
 }
 
+func TestDartAdapter_32kNestedMapCallsPerformance(t *testing.T) {
+	n := 32000
+	src := "void main(){" + strings.Repeat("f(", n) + "{}" + strings.Repeat(")", n) + ";}"
+	adapter := dart.NewAdapter()
+
+	start := time.Now()
+	units, err := adapter.LocateTests([]byte(src), "nested_map_test.dart")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("expected 0 units, got %d", len(units))
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected 32k nested map calls to process in under 1s, took %v", elapsed)
+	}
+}
+
 func TestIsGenerated(t *testing.T) {
 	adapter := dart.NewAdapter()
 	if !adapter.IsGenerated("foo.freezed.dart", []byte("")) {

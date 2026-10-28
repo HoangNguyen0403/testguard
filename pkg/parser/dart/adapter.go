@@ -561,28 +561,65 @@ func stripCommentsAndStrings(code string) string {
 func findAssertingHelpers(src string) map[string]bool {
 	assertingHelpers := make(map[string]bool)
 	n := len(src)
+	if n == 0 {
+		return assertingHelpers
+	}
+
+	closing := make([]int, n)
+	for idx := range closing {
+		closing[idx] = -1
+	}
+	var parenStack []int
+	var braceStack []int
 	for i := 0; i < n; {
 		next := skipCommentsAndStrings(src, i)
 		if next != i {
 			i = next
 			continue
 		}
-		if isIdentStart(src[i]) {
-			identStart := i
-			for i < n && isIdentPart(src[i]) {
-				i++
+		switch src[i] {
+		case '(':
+			parenStack = append(parenStack, i)
+		case ')':
+			if len(parenStack) > 0 {
+				open := parenStack[len(parenStack)-1]
+				parenStack = parenStack[:len(parenStack)-1]
+				closing[open] = i
 			}
-			name := src[identStart:i]
+		case '{':
+			braceStack = append(braceStack, i)
+		case '}':
+			if len(braceStack) > 0 {
+				open := braceStack[len(braceStack)-1]
+				braceStack = braceStack[:len(braceStack)-1]
+				closing[open] = i
+			}
+		}
+		i++
+	}
 
-			j := skipWhitespaceAndComments(src, i)
-			if j < n && src[j] == '<' {
-				if k := findMatchingAngleBracket(src, j); k != -1 {
-					j = skipWhitespaceAndComments(src, k+1)
-				}
+	var scanRange func(start, end int)
+	scanRange = func(start, end int) {
+		for i := start; i < end; {
+			next := skipCommentsAndStrings(src, i)
+			if next != i {
+				i = next
+				continue
 			}
-			if j < n && src[j] == '(' {
-				parenClose := findMatchingParen(src, j)
-				if parenClose != -1 {
+
+			if src[i] == '{' {
+				closeBrace := closing[i]
+				if closeBrace != -1 && closeBrace < end {
+					i = closeBrace + 1
+					continue
+				}
+				i++
+				continue
+			}
+
+			if src[i] == '(' {
+				parenClose := closing[i]
+				if parenClose != -1 && parenClose < end {
 					k := skipWhitespaceAndComments(src, parenClose+1)
 					if strings.HasPrefix(src[k:], "async*") {
 						k = skipWhitespaceAndComments(src, k+6)
@@ -591,41 +628,79 @@ func findAssertingHelpers(src string) map[string]bool {
 					} else if strings.HasPrefix(src[k:], "sync*") {
 						k = skipWhitespaceAndComments(src, k+5)
 					}
-
-					if k < n && src[k] == '{' {
+					if k < end && src[k] == '{' {
 						openBrace := k
-						closeBrace := parser.FindMatchingBrace(src, openBrace)
-						if closeBrace != -1 {
-							body := src[openBrace : closeBrace+1]
-							if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
-								assertingHelpers[name] = true
-							}
-							i = openBrace + 1
+						closeBrace := closing[openBrace]
+						if closeBrace != -1 && closeBrace < end {
+							scanRange(openBrace+1, closeBrace)
+							i = closeBrace + 1
 							continue
 						}
-					} else if k+1 < n && src[k] == '=' && src[k+1] == '>' {
-						arrowStart := k + 2
-						semiIdx := findSemicolon(src, arrowStart)
-						if semiIdx != -1 {
-							body := src[arrowStart:semiIdx]
-							if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
-								assertingHelpers[name] = true
-							}
-							i = semiIdx + 1
-							continue
-						}
-					}
-					// Only skip over parenClose if there are no braces/blocks inside the argument list.
-					// If the argument list contains a block callback (e.g. group('...', () { ... })),
-					// we must scan inside to discover nested helpers.
-					if !strings.Contains(src[j:parenClose+1], "{") {
-						i = parenClose + 1
-						continue
 					}
 				}
 			}
+
+			if isIdentStart(src[i]) {
+				identStart := i
+				for i < end && isIdentPart(src[i]) {
+					i++
+				}
+				name := src[identStart:i]
+
+				j := skipWhitespaceAndComments(src, i)
+				if j < end && src[j] == '<' {
+					if k := findMatchingAngleBracket(src, j); k != -1 && k < end {
+						j = skipWhitespaceAndComments(src, k+1)
+					}
+				}
+				if j < end && src[j] == '(' {
+					parenClose := closing[j]
+					if parenClose != -1 && parenClose < end {
+						k := skipWhitespaceAndComments(src, parenClose+1)
+						if strings.HasPrefix(src[k:], "async*") {
+							k = skipWhitespaceAndComments(src, k+6)
+						} else if strings.HasPrefix(src[k:], "async") && (k+5 >= n || !isIdentPart(src[k+5])) {
+							k = skipWhitespaceAndComments(src, k+5)
+						} else if strings.HasPrefix(src[k:], "sync*") {
+							k = skipWhitespaceAndComments(src, k+5)
+						}
+
+						if k < end && src[k] == '{' {
+							openBrace := k
+							closeBrace := closing[openBrace]
+							if closeBrace != -1 && closeBrace < end {
+								body := src[openBrace : closeBrace+1]
+								if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
+									assertingHelpers[name] = true
+								}
+								scanRange(openBrace+1, closeBrace)
+								i = closeBrace + 1
+								continue
+							}
+						} else if k+1 < end && src[k] == '=' && src[k+1] == '>' {
+							arrowStart := k + 2
+							semiIdx := findSemicolon(src, arrowStart)
+							if semiIdx != -1 && semiIdx < end {
+								body := src[arrowStart:semiIdx]
+								if isValidHelperName(name) && assertionRegex.MatchString(stripCommentsAndStrings(body)) {
+									assertingHelpers[name] = true
+								}
+								i = semiIdx + 1
+								continue
+							}
+						} else {
+							scanRange(j+1, parenClose)
+							i = parenClose + 1
+							continue
+						}
+					}
+				}
+				continue
+			}
+			i++
 		}
-		i++
 	}
+
+	scanRange(0, n)
 	return assertingHelpers
 }

@@ -1232,3 +1232,136 @@ func TestF2_TSMultilineExpressionArrow(t *testing.T) {
 		t.Errorf("expected 0 violations for asserting multiline helper, got %v", res.Violations)
 	}
 }
+func TestReReview2_N1_N2_N3_N5_E1(t *testing.T) {
+	eng := engine.New()
+
+	t.Run("N1: fake controller emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "fake_controller_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+type fake struct{}
+func(fake) EXPECT(){}
+type factory struct{}
+func(factory) NewController() int{return 0}
+func NewMockDummy(int) fake{return fake{}}
+func TestHollow(t *testing.T){f:=factory{};m:=NewMockDummy(f.NewController());m.EXPECT()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N1: suite ctrl int emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "suite_ctrl_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "github.com/stretchr/testify/suite"
+type fake struct{}
+func(fake) EXPECT(){}
+func NewMockDummy(int) fake{return fake{}}
+type S struct{suite.Suite;ctrl int;repo fake}
+func(s *S) SetupTest(){s.repo=NewMockDummy(s.ctrl)}
+func(s *S) TestHollow(){s.repo.EXPECT()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N2: field collision emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "field_collision_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type fake struct{}
+func(fake) EXPECT(){}
+type box struct{repo any}
+func TestHollow(t *testing.T){ctrl:=gomock.NewController(t);m:=NewMockRepo(ctrl);a:=box{};a.repo=m;b:=struct{repo fake}{repo:fake{}};b.repo.EXPECT();_ = a}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N3: suite skip unrelated package emits no findings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "suite_skip_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "example.test/custom"
+type S struct{named custom.Suite}
+func(s *S) T() *custom.T {return nil}
+func(s *S) TestUtility(){s.T().Skip("not a test")}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 0 {
+			t.Errorf("expected 0 violations, got %v", res.Violations)
+		}
+	})
+
+	t.Run("N5: go03 nested testing param emits GO-03", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "go03_nested_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+func TestRows(t *testing.T){cases:=[]struct{name string;n int}{{"a",1},{"b",1}};t.Run("parent",func(t *testing.T){for _,tc:=range cases{t.Run(tc.name,func(t *testing.T){if tc.n!=1{t.Fatal(tc.n)}})}})}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-GO-03" {
+			t.Errorf("expected 1 GUARD-GO-03, got %v", res.Violations)
+		}
+	})
+
+	t.Run("E1: go03 tagless switch emits no findings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "go03_tagless_switch_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import "testing"
+func TestRows(t *testing.T){cases:=[]struct{name string;n int}{{"a",1},{"b",1}};for _,tc:=range cases{t.Run(tc.name,func(t *testing.T){switch{case tc.name=="a":if tc.n!=1{t.Fatal(tc.n)};default:if tc.n!=2{t.Fatal(tc.n)}}})}}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 0 {
+			t.Errorf("expected 0 violations, got %v", res.Violations)
+		}
+	})
+
+	t.Run("Task 9 safety flag: same-file EXPECT non-mock emits UNIV-ZERO", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "nonmock_test.go")
+		_ = os.WriteFile(p, []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type logger struct{}
+func(logger) EXPECT() logger{return logger{}}
+func(logger) Info(){}
+func TestHollow(t *testing.T){_ = gomock.NewController(t);log:=logger{};log.EXPECT().Info()}
+`), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO, got %v", res.Violations)
+		}
+	})
+}

@@ -278,6 +278,40 @@ func isTableComposite(compLit *ast.CompositeLit) bool {
 	return true
 }
 
+func isRecognizedTestingParam(expr ast.Expr, fileImports map[string]string) bool {
+	testingPkgName := "testing"
+	dotTesting := false
+	if fileImports != nil {
+		for local, path := range fileImports {
+			if path == "testing" {
+				if local == "." {
+					dotTesting = true
+				} else {
+					testingPkgName = local
+				}
+				break
+			}
+		}
+	}
+	if star, ok := expr.(*ast.StarExpr); ok {
+		if sel, ok := star.X.(*ast.SelectorExpr); ok {
+			if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == testingPkgName {
+				if sel.Sel.Name == "T" || sel.Sel.Name == "B" || sel.Sel.Name == "TB" {
+					return true
+				}
+			}
+		} else if ident, ok := star.X.(*ast.Ident); ok {
+			if dotTesting && (ident.Name == "T" || ident.Name == "B" || ident.Name == "TB") {
+				return true
+			}
+			if ident.Name == "T" || ident.Name == "B" || ident.Name == "TB" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.CompositeLit) (string, string) {
 	var rowLit *ast.CompositeLit
 	switch e := elt.(type) {
@@ -368,20 +402,35 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		return violations
 	}
 
-	var testingParamObj *ast.Object
-	if fn.Type != nil && fn.Type.Params != nil && len(fn.Type.Params.List) > 0 {
+	testingParamObjs := make(map[*ast.Object]bool)
+	if fn.Type != nil && fn.Type.Params != nil {
 		for _, f := range fn.Type.Params.List {
-			for _, name := range f.Names {
-				if name.Obj != nil {
-					testingParamObj = name.Obj
-					break
+			if isRecognizedTestingParam(f.Type, unit.FileImports) {
+				for _, name := range f.Names {
+					if name.Obj != nil {
+						testingParamObjs[name.Obj] = true
+					}
 				}
-			}
-			if testingParamObj != nil {
-				break
 			}
 		}
 	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if fnLit, ok := n.(*ast.FuncLit); ok {
+			if fnLit.Type != nil && fnLit.Type.Params != nil {
+				for _, f := range fnLit.Type.Params.List {
+					if isRecognizedTestingParam(f.Type, unit.FileImports) {
+						for _, name := range f.Names {
+							if name.Obj != nil {
+								testingParamObjs[name.Obj] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
 	var suiteRecvObj *ast.Object
 	if fn.Recv != nil && len(fn.Recv.List) > 0 {
 		for _, name := range fn.Recv.List[0].Names {
@@ -447,35 +496,41 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		}
 		if rowIdentObj != nil {
 			hasConditionOnName := false
+			checkExprForName := func(expr ast.Expr) bool {
+				found := false
+				ast.Inspect(expr, func(cn ast.Node) bool {
+					if sel, ok := cn.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
+							low := strings.ToLower(sel.Sel.Name)
+							if low == "name" || low == "desc" || low == "description" || low == "title" {
+								found = true
+								return false
+							}
+						}
+					}
+					return true
+				})
+				return found
+			}
+
 			ast.Inspect(rng.Body, func(bn ast.Node) bool {
 				switch stmt := bn.(type) {
 				case *ast.IfStmt:
-					ast.Inspect(stmt.Cond, func(cn ast.Node) bool {
-						if sel, ok := cn.(*ast.SelectorExpr); ok {
-							if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
-								low := strings.ToLower(sel.Sel.Name)
-								if low == "name" || low == "desc" || low == "description" || low == "title" {
-									hasConditionOnName = true
-									return false
-								}
-							}
-						}
-						return true
-					})
+					if checkExprForName(stmt.Cond) {
+						hasConditionOnName = true
+						return false
+					}
 				case *ast.SwitchStmt:
-					if stmt.Tag != nil {
-						ast.Inspect(stmt.Tag, func(cn ast.Node) bool {
-							if sel, ok := cn.(*ast.SelectorExpr); ok {
-								if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
-									low := strings.ToLower(sel.Sel.Name)
-									if low == "name" || low == "desc" || low == "description" || low == "title" {
-										hasConditionOnName = true
-										return false
-									}
-								}
-							}
-							return true
-						})
+					if stmt.Tag != nil && checkExprForName(stmt.Tag) {
+						hasConditionOnName = true
+						return false
+					}
+				case *ast.CaseClause:
+					for _, expr := range stmt.List {
+						if checkExprForName(expr) {
+							hasConditionOnName = true
+							return false
+						}
 					}
 				}
 				return true
@@ -497,7 +552,7 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			}
 			// Verify Run is called on recognized testing parameter or suite receiver
 			if id, ok := sel.X.(*ast.Ident); ok {
-				if (testingParamObj != nil && id.Obj == testingParamObj) || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
+				if testingParamObjs[id.Obj] || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
 					hasRunCall = true
 					return false
 				}

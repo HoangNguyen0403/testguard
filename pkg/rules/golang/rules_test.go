@@ -581,3 +581,55 @@ func TestF11_ShadowedTableNotRangedOver(t *testing.T) {
 		t.Errorf("expected 0 violations for unused outer duplicate table, got %d: %+v", len(violations), violations)
 	}
 }
+
+func TestN5_GO03NestedTestingParam(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/nested_test.go",
+		StartLine: 1,
+		RawBody: `func TestRows(t *testing.T){
+		cases:=[]struct{name string;n int}{{"a",1},{"b",1}};
+		t.Run("parent",func(t *testing.T){
+			for _,tc:=range cases{
+				t.Run(tc.name,func(t *testing.T){
+					if tc.n!=1{t.Fatal(tc.n)}
+				})
+			}
+		})
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation for duplicate table row under nested t.Run param, got %d: %+v", len(violations), violations)
+	}
+	if violations[0].RuleID != "GUARD-GO-03" {
+		t.Errorf("expected RuleID GUARD-GO-03, got %s", violations[0].RuleID)
+	}
+}
+
+func TestEdgeE1_GO03TaglessSwitch(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/tagless_test.go",
+		StartLine: 1,
+		RawBody: `func TestRows(t *testing.T){
+		cases:=[]struct{name string;n int}{{"a",1},{"b",1}};
+		for _,tc:=range cases{
+			t.Run(tc.name,func(t *testing.T){
+				switch{
+				case tc.name=="a":
+					if tc.n!=1{t.Fatal(tc.n)};
+				default:
+					if tc.n!=2{t.Fatal(tc.n)}
+				}
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations when tagless switch references name field, got %d: %+v", len(violations), violations)
+	}
+}

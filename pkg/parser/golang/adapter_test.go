@@ -1465,3 +1465,93 @@ func TestMixedRunner(t *testing.T) {
 		t.Errorf("expected TestMixedRunner to have Kind 'unit', got %q", uMixed.Kind)
 	}
 }
+
+func TestN1_GomockFakeControllerAndLocallyDeclaredConstructor(t *testing.T) {
+	adapter := golang.NewAdapter()
+
+	t.Run("inline fake NewController and local NewMock constructor have zero assertions", func(t *testing.T) {
+		source := []byte(`package sample
+import "testing"
+type fake struct{}
+func(fake) EXPECT(){}
+type factory struct{}
+func(factory) NewController() int{return 0}
+func NewMockDummy(int) fake{return fake{}}
+func TestHollow(t *testing.T){f:=factory{};m:=NewMockDummy(f.NewController());m.EXPECT()}
+`)
+		units, err := adapter.LocateTests(source, "fake_controller_test.go")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(units) != 1 {
+			t.Fatalf("expected 1 unit, got %d", len(units))
+		}
+		if len(units[0].Assertions) != 0 {
+			t.Errorf("expected 0 assertions for fake controller & local constructor, got %v", units[0].Assertions)
+		}
+	})
+
+	t.Run("suite ctrl int field without gomock assignment has zero assertions", func(t *testing.T) {
+		source := []byte(`package sample
+import "github.com/stretchr/testify/suite"
+type fake struct{}
+func(fake) EXPECT(){}
+func NewMockDummy(int) fake{return fake{}}
+type S struct{suite.Suite;ctrl int;repo fake}
+func(s *S) SetupTest(){s.repo=NewMockDummy(s.ctrl)}
+func(s *S) TestHollow(){s.repo.EXPECT()}
+`)
+		units, err := adapter.LocateTests(source, "suite_ctrl_test.go")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(units) != 1 {
+			t.Fatalf("expected 1 unit, got %d", len(units))
+		}
+		if len(units[0].Assertions) != 0 {
+			t.Errorf("expected 0 assertions for suite ctrl int field, got %v", units[0].Assertions)
+		}
+	})
+}
+
+func TestN2_GomockFieldCollisionProvenance(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type fake struct{}
+func(fake) EXPECT(){}
+type box struct{repo any}
+func TestHollow(t *testing.T){ctrl:=gomock.NewController(t);m:=NewMockRepo(ctrl);a:=box{};a.repo=m;b:=struct{repo fake}{repo:fake{}};b.repo.EXPECT();_ = a}
+`)
+	units, err := adapter.LocateTests(source, "field_collision_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for field collision on unrelated object, got %v", units[0].Assertions)
+	}
+}
+
+func TestTask9SafetyFlag_SameFileExpectNonMock(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample
+import("testing";"go.uber.org/mock/gomock")
+type logger struct{}
+func(logger) EXPECT() logger{return logger{}}
+func(logger) Info(){}
+func TestHollow(t *testing.T){_ = gomock.NewController(t);log:=logger{};log.EXPECT().Info()}
+`)
+	units, err := adapter.LocateTests(source, "nonmock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for same-file EXPECT non-mock, got %v", units[0].Assertions)
+	}
+}

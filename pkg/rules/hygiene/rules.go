@@ -14,6 +14,7 @@ import (
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
+	"github.com/HoangNguyen0403/testguard/pkg/parser/golang"
 )
 
 var (
@@ -633,22 +634,7 @@ func (r *SkipRule) checkGoSkips(filePath string, src string) []models.Violation 
 		}
 	}
 
-	provableSuites := make(map[string]bool)
-	for _, decl := range fileAST.Decls {
-		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
-			for _, spec := range gen.Specs {
-				if ts, ok := spec.(*ast.TypeSpec); ok {
-					if st, ok := ts.Type.(*ast.StructType); ok && st.Fields != nil {
-						for _, field := range st.Fields.List {
-							if sel, ok := field.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Suite" {
-								provableSuites[ts.Name.Name] = true
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+	provableSuites := golang.FindEmbeddedSuiteStructs(fileAST)
 
 	for _, decl := range fileAST.Decls {
 		fn, ok := decl.(*ast.FuncDecl)

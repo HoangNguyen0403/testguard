@@ -317,4 +317,16 @@ func TestReal(t *testing.T) { if false { t.Fatal("failure") } }`
 			t.Errorf("expected 0 violations for non-test receiver method Skip, got %d: %+v", len(res), res)
 		}
 	})
+	t.Run("N3: named Suite field from arbitrary package not treated as suite", func(t *testing.T) {
+		src := `package sample
+import "example.test/custom"
+type S struct{named custom.Suite}
+func(s *S) T() *custom.T {return nil}
+func(s *S) TestUtility(){s.T().Skip("not a test")}
+`
+		res := rule.CheckFile("suite_skip_test.go", src)
+		if len(res) != 0 {
+			t.Errorf("expected 0 violations for arbitrary package named Suite field, got %d: %+v", len(res), res)
+		}
+	})
 }
