@@ -198,10 +198,15 @@ func blankCommentsAndStrings(src string, isTS bool) string {
 
 func collectTSAssertingHelpers(src string) map[string]bool {
 	helpers := make(map[string]bool)
+	cleanFullSrc := blankCommentsAndStrings(src, true)
 
 	scanBlock := func(re *regexp.Regexp) {
 		matches := re.FindAllStringSubmatchIndex(src, -1)
 		for _, m := range matches {
+			if m[0] >= len(cleanFullSrc) || cleanFullSrc[m[0]] != src[m[0]] {
+				// Declaration start is inside a comment or string
+				continue
+			}
 			name := src[m[2]:m[3]]
 			openBrace := m[1] - 1
 			if openBrace >= 0 && openBrace < len(src) && src[openBrace] == '{' {
@@ -224,17 +229,30 @@ func collectTSAssertingHelpers(src string) map[string]bool {
 	// Expression-bodied arrows: const f = (...) => expect(...)...;
 	arrowMatches := tsVarArrowExprRegex.FindAllStringSubmatchIndex(src, -1)
 	for _, m := range arrowMatches {
+		if m[0] >= len(cleanFullSrc) || cleanFullSrc[m[0]] != src[m[0]] {
+			// Declaration start is inside a comment or string
+			continue
+		}
 		name := src[m[2]:m[3]]
 		idx := m[1]
 		for idx < len(src) && (src[idx] == ' ' || src[idx] == '\t' || src[idx] == '\r' || src[idx] == '\n') {
 			idx++
 		}
 		if idx < len(src) && src[idx] != '{' {
-			end := idx
-			for end < len(src) && src[end] != ';' && src[end] != '\n' {
-				end++
+			var body string
+			if src[idx] == '(' {
+				closeParen := parser.FindMatchingTSParen(src, idx)
+				if closeParen != -1 {
+					body = src[idx : closeParen+1]
+				}
 			}
-			body := src[idx:end]
+			if body == "" {
+				end := idx
+				for end < len(src) && src[end] != ';' && src[end] != '\n' {
+					end++
+				}
+				body = src[idx:end]
+			}
 			cleanBody := blankCommentsAndStrings(body, true)
 			if genericAssertionRegex.MatchString(cleanBody) {
 				helpers[name] = true
@@ -351,10 +369,33 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 		if isTS && len(assertingHelpers) > 0 {
 			for helper := range assertingHelpers {
 				callPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(helper) + `\s*\(`)
-				if callPattern.MatchString(cleanBody) {
+				matches := callPattern.FindAllStringIndex(cleanBody, -1)
+				for _, match := range matches {
+					start := match[0]
+					p := start - 1
+					for p >= 0 && (cleanBody[p] == ' ' || cleanBody[p] == '\t' || cleanBody[p] == '\r' || cleanBody[p] == '\n') {
+						p--
+					}
+					if p >= 0 && (cleanBody[p] == '.' || cleanBody[p] == '?') {
+						continue // member call like obj.check() or obj?.check()
+					}
+					// Verify this is an actual call, not an object method declaration like { check() {} }
+					openParen := strings.Index(cleanBody[start:], "(") + start
+					closeParen := parser.FindMatchingTSParen(cleanBody, openParen)
+					if closeParen != -1 {
+						after := closeParen + 1
+						for after < len(cleanBody) && (cleanBody[after] == ' ' || cleanBody[after] == '\t' || cleanBody[after] == '\r' || cleanBody[after] == '\n') {
+							after++
+						}
+						if after < len(cleanBody) && cleanBody[after] == '{' {
+							continue // method definition like { check() {} }
+						}
+					}
+
 					shadowPattern := regexp.MustCompile(`(?:\b(?:const|let|var)\s+` + regexp.QuoteMeta(helper) + `\b|\bfunction\s+` + regexp.QuoteMeta(helper) + `\b)`)
 					if !shadowPattern.MatchString(cleanBody) {
 						assertions = append(assertions, "helper:"+helper)
+						break
 					}
 				}
 			}

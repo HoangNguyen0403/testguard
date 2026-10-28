@@ -615,12 +615,15 @@ func findAssertingHelpers(src string) map[string]bool {
 							continue
 						}
 					}
-					// Matched call span - skip over it to maintain linear time
-					i = parenClose + 1
-					continue
+					// Only skip over parenClose if there are no braces/blocks inside the argument list.
+					// If the argument list contains a block callback (e.g. group('...', () { ... })),
+					// we must scan inside to discover nested helpers.
+					if !strings.Contains(src[j:parenClose+1], "{") {
+						i = parenClose + 1
+						continue
+					}
 				}
 			}
-			continue
 		}
 		i++
 	}

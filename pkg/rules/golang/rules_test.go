@@ -465,3 +465,119 @@ func TestDomainPurityRule_ImportedPackageShadowedLocallyIgnored(t *testing.T) {
 		t.Errorf("expected 0 violations when the imported identifier is shadowed locally, got %d", len(violations))
 	}
 }
+func TestF10_NamedRowDistinctInputsNotDuplicate(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/inputs_test.go",
+		StartLine: 10,
+		RawBody: `func TestRows(t *testing.T) {
+		type row struct { input string; want int }
+		cases := []row{{"first", 1}, {"second", 1}}
+		for _, tc := range cases {
+			t.Run(tc.input, func(t *testing.T) {
+				if len(tc.input) != tc.want { t.Fatal(tc.input) }
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for distinct input rows, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestR3_PositionalStringAndBoolRowsNotDuplicate(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestEnvRows",
+		FilePath:  "service/env_test.go",
+		StartLine: 10,
+		RawBody: `func TestEnvRows(t *testing.T) {
+		type envRow struct { env string; active bool }
+		cases := []envRow{{"prd", true}, {"prod", true}}
+		for _, tc := range cases {
+			t.Run(tc.env, func(t *testing.T) {
+				if !tc.active { t.Fatal(tc.env) }
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for positional string and bool rows, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestR3_RangeBodyConditionsOnNameFieldSkipped(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestConditionsOnName",
+		FilePath:  "service/cond_test.go",
+		StartLine: 10,
+		RawBody: `func TestConditionsOnName(t *testing.T) {
+		cases := []struct { name string; want int }{
+			{"case 1", 1},
+			{"case 2", 1},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if tc.name == "case 1" {
+					// special logic
+				}
+			})
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations when condition branches on name field, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestF11_UnrelatedRunReceiverNotTableTest(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestData",
+		FilePath:  "service/data_test.go",
+		StartLine: 10,
+		RawBody: `func TestData(t *testing.T) {
+		type processor struct{}
+		var p processor
+		data := []struct{ n int }{{1}, {1}}
+		for _, d := range data {
+			p.Run(d.n)
+		}
+		if len(data) != 2 { t.Fatal(data) }
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for non-test Run method, got %d: %+v", len(violations), violations)
+	}
+}
+
+func TestF11_ShadowedTableNotRangedOver(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+	unit := parser.TestUnit{
+		Name:      "TestRows",
+		FilePath:  "service/shadow_test.go",
+		StartLine: 10,
+		RawBody: `func TestRows(t *testing.T) {
+		cases := []struct{ n int }{{1}, {1}}
+		_ = cases
+		{
+			cases := []int{2, 3}
+			for _, n := range cases {
+				t.Run("unique", func(t *testing.T) {
+					if n < 0 { t.Fatal(n) }
+				})
+			}
+		}
+	}`,
+	}
+	violations := checker.Evaluate(unit)
+	if len(violations) != 0 {
+		t.Errorf("expected 0 violations for unused outer duplicate table, got %d: %+v", len(violations), violations)
+	}
+}

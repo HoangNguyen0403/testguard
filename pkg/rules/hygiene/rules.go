@@ -616,6 +616,40 @@ func (r *SkipRule) checkGoSkips(filePath string, src string) []models.Violation 
 		return nil
 	}
 
+	testingPkgName := "testing"
+	dotTesting := false
+	for _, imp := range fileAST.Imports {
+		if imp.Path != nil {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if path == "testing" {
+				if imp.Name != nil {
+					if imp.Name.Name == "." {
+						dotTesting = true
+					} else {
+						testingPkgName = imp.Name.Name
+					}
+				}
+			}
+		}
+	}
+
+	provableSuites := make(map[string]bool)
+	for _, decl := range fileAST.Decls {
+		if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+			for _, spec := range gen.Specs {
+				if ts, ok := spec.(*ast.TypeSpec); ok {
+					if st, ok := ts.Type.(*ast.StructType); ok && st.Fields != nil {
+						for _, field := range st.Fields.List {
+							if sel, ok := field.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Suite" {
+								provableSuites[ts.Name.Name] = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for _, decl := range fileAST.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name == nil || fn.Body == nil || len(fn.Body.List) == 0 {
@@ -624,23 +658,62 @@ func (r *SkipRule) checkGoSkips(filePath string, src string) []models.Violation 
 		if !strings.HasPrefix(fn.Name.Name, "Test") && !strings.HasPrefix(fn.Name.Name, "Benchmark") {
 			continue
 		}
-		if fn.Type.Params == nil || len(fn.Type.Params.List) == 0 {
-			continue
+
+		// Reject receiver methods unless they belong to a proven suite
+		var suiteRecvObj *ast.Object
+		if fn.Recv != nil && len(fn.Recv.List) > 0 {
+			recvType := ""
+			switch t := fn.Recv.List[0].Type.(type) {
+			case *ast.StarExpr:
+				if id, ok := t.X.(*ast.Ident); ok {
+					recvType = id.Name
+				}
+			case *ast.Ident:
+				recvType = t.Name
+			}
+			if !provableSuites[recvType] {
+				continue
+			}
+			if len(fn.Recv.List[0].Names) > 0 {
+				suiteRecvObj = fn.Recv.List[0].Names[0].Obj
+			}
 		}
+
 		var testingParamObj *ast.Object
-		for _, field := range fn.Type.Params.List {
-			for _, name := range field.Names {
-				if name.Obj != nil {
-					testingParamObj = name.Obj
+		if fn.Recv == nil {
+			if fn.Type.Params == nil || len(fn.Type.Params.List) == 0 {
+				continue
+			}
+			for _, field := range fn.Type.Params.List {
+				isTesting := false
+				if star, ok := field.Type.(*ast.StarExpr); ok {
+					if sel, ok := star.X.(*ast.SelectorExpr); ok {
+						if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == testingPkgName {
+							if sel.Sel.Name == "T" || sel.Sel.Name == "B" || sel.Sel.Name == "F" || sel.Sel.Name == "TB" {
+								isTesting = true
+							}
+						}
+					} else if id, ok := star.X.(*ast.Ident); ok && dotTesting {
+						if id.Name == "T" || id.Name == "B" || id.Name == "F" || id.Name == "TB" {
+							isTesting = true
+						}
+					}
+				}
+				if isTesting {
+					for _, name := range field.Names {
+						if name.Obj != nil {
+							testingParamObj = name.Obj
+							break
+						}
+					}
+				}
+				if testingParamObj != nil {
 					break
 				}
 			}
-			if testingParamObj != nil {
-				break
+			if testingParamObj == nil {
+				continue
 			}
-		}
-		if testingParamObj == nil {
-			continue
 		}
 
 		firstStmt := fn.Body.List[0]
@@ -660,13 +733,25 @@ func (r *SkipRule) checkGoSkips(filePath string, src string) []models.Violation 
 		if methodName != "Skip" && methodName != "Skipf" && methodName != "SkipNow" {
 			continue
 		}
-		recvIdent, ok := sel.X.(*ast.Ident)
-		if !ok || recvIdent.Obj != testingParamObj {
+
+		isTargetSkip := false
+		if recvIdent, ok := sel.X.(*ast.Ident); ok {
+			if testingParamObj != nil && recvIdent.Obj == testingParamObj {
+				isTargetSkip = true
+			}
+		} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+			if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+				if id, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+					isTargetSkip = true
+				}
+			}
+		}
+		if !isTargetSkip {
 			continue
 		}
 
 		pos := fset.Position(call.Pos())
-		snippet := fmt.Sprintf("%s.%s(...)", recvIdent.Name, methodName)
+		snippet := fmt.Sprintf("%s(...)", methodName)
 		var buf bytes.Buffer
 		if err := format.Node(&buf, fset, call); err == nil {
 			snippet = buf.String()

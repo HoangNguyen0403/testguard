@@ -304,7 +304,20 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 	nameFieldIndex := -1
 	if compLit != nil {
 		if arrType, ok := compLit.Type.(*ast.ArrayType); ok {
-			if st, ok := arrType.Elt.(*ast.StructType); ok && st.Fields != nil {
+			var st *ast.StructType
+			switch eltType := arrType.Elt.(type) {
+			case *ast.StructType:
+				st = eltType
+			case *ast.Ident:
+				if eltType.Obj != nil && eltType.Obj.Kind == ast.Typ {
+					if ts, ok := eltType.Obj.Decl.(*ast.TypeSpec); ok {
+						if s, ok := ts.Type.(*ast.StructType); ok {
+							st = s
+						}
+					}
+				}
+			}
+			if st != nil && st.Fields != nil {
 				fieldIdx := 0
 				for _, field := range st.Fields.List {
 					if len(field.Names) == 0 {
@@ -338,10 +351,6 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 		} else {
 			if nameFieldIndex != -1 && idx == nameFieldIndex {
 				continue
-			} else if nameFieldIndex == -1 && idx == 0 {
-				if bl, ok := f.(*ast.BasicLit); ok && bl.Kind == token.STRING {
-					continue
-				}
 			}
 			var buf bytes.Buffer
 			_ = format.Node(&buf, fset, f)
@@ -359,14 +368,38 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		return violations
 	}
 
-	assignedTables := make(map[string]*ast.CompositeLit)
+	var testingParamObj *ast.Object
+	if fn.Type != nil && fn.Type.Params != nil && len(fn.Type.Params.List) > 0 {
+		for _, f := range fn.Type.Params.List {
+			for _, name := range f.Names {
+				if name.Obj != nil {
+					testingParamObj = name.Obj
+					break
+				}
+			}
+			if testingParamObj != nil {
+				break
+			}
+		}
+	}
+	var suiteRecvObj *ast.Object
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		for _, name := range fn.Recv.List[0].Names {
+			if name.Obj != nil {
+				suiteRecvObj = name.Obj
+				break
+			}
+		}
+	}
+
+	assignedTables := make(map[*ast.Object]*ast.CompositeLit)
 	for _, stmt := range fn.Body.List {
 		switch s := stmt.(type) {
 		case *ast.AssignStmt:
 			for i, lhs := range s.Lhs {
-				if ident, ok := lhs.(*ast.Ident); ok && i < len(s.Rhs) {
+				if ident, ok := lhs.(*ast.Ident); ok && ident.Obj != nil && i < len(s.Rhs) {
 					if compLit, ok := s.Rhs[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
-						assignedTables[ident.Name] = compLit
+						assignedTables[ident.Obj] = compLit
 					}
 				}
 			}
@@ -375,9 +408,9 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 				for _, spec := range gen.Specs {
 					if vs, ok := spec.(*ast.ValueSpec); ok {
 						for i, name := range vs.Names {
-							if i < len(vs.Values) {
+							if name.Obj != nil && i < len(vs.Values) {
 								if compLit, ok := vs.Values[i].(*ast.CompositeLit); ok && isTableComposite(compLit) {
-									assignedTables[name.Name] = compLit
+									assignedTables[name.Obj] = compLit
 								}
 							}
 						}
@@ -398,13 +431,60 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			return true
 		}
 		ident, ok := rng.X.(*ast.Ident)
-		if !ok {
+		if !ok || ident.Obj == nil {
 			return true
 		}
-		compLit, exists := assignedTables[ident.Name]
+		compLit, exists := assignedTables[ident.Obj]
 		if !exists {
 			return true
 		}
+
+		// R3: If the range body references the row's name field in a condition (if tt.name == ... / switch tt.name),
+		// the rows are conditionally branched by name and not duplicates by construction — skip that table.
+		var rowIdentObj *ast.Object
+		if valIdent, ok := rng.Value.(*ast.Ident); ok && valIdent.Obj != nil {
+			rowIdentObj = valIdent.Obj
+		}
+		if rowIdentObj != nil {
+			hasConditionOnName := false
+			ast.Inspect(rng.Body, func(bn ast.Node) bool {
+				switch stmt := bn.(type) {
+				case *ast.IfStmt:
+					ast.Inspect(stmt.Cond, func(cn ast.Node) bool {
+						if sel, ok := cn.(*ast.SelectorExpr); ok {
+							if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
+								low := strings.ToLower(sel.Sel.Name)
+								if low == "name" || low == "desc" || low == "description" || low == "title" {
+									hasConditionOnName = true
+									return false
+								}
+							}
+						}
+						return true
+					})
+				case *ast.SwitchStmt:
+					if stmt.Tag != nil {
+						ast.Inspect(stmt.Tag, func(cn ast.Node) bool {
+							if sel, ok := cn.(*ast.SelectorExpr); ok {
+								if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
+									low := strings.ToLower(sel.Sel.Name)
+									if low == "name" || low == "desc" || low == "description" || low == "title" {
+										hasConditionOnName = true
+										return false
+									}
+								}
+							}
+							return true
+						})
+					}
+				}
+				return true
+			})
+			if hasConditionOnName {
+				return true
+			}
+		}
+
 		hasRunCall := false
 		ast.Inspect(rng.Body, func(bn ast.Node) bool {
 			call, ok := bn.(*ast.CallExpr)
@@ -412,12 +492,22 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
+			if !ok || sel.Sel.Name != "Run" {
 				return true
 			}
-			if sel.Sel.Name == "Run" {
-				hasRunCall = true
-				return false
+			// Verify Run is called on recognized testing parameter or suite receiver
+			if id, ok := sel.X.(*ast.Ident); ok {
+				if (testingParamObj != nil && id.Obj == testingParamObj) || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
+					hasRunCall = true
+					return false
+				}
+			} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+					if id, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+						hasRunCall = true
+						return false
+					}
+				}
 			}
 			return true
 		})
@@ -426,7 +516,6 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		}
 		return true
 	})
-
 	if len(validTables) == 0 {
 		return violations
 	}

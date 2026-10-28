@@ -211,15 +211,21 @@ func isInsideClassBody(src string, targetIdx int) bool {
 	return false
 }
 
+var jsIdentRegex = regexp.MustCompile(`^[a-zA-Z_$][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$`)
+
 func isPositiveDelay(s string) bool {
+	s = blankCommentsAndStrings(s)
 	s = strings.TrimSpace(s)
-	if s == "" || s == "undefined" {
+	if s == "" || s == "undefined" || s == "null" || s == "false" || s == "NaN" {
 		return false
+	}
+	if s == "true" {
+		return true
 	}
 	if val, err := strconv.ParseFloat(s, 64); err == nil {
 		return val > 0
 	}
-	return true
+	return jsIdentRegex.MatchString(s)
 }
 
 func isLiteralZero(s string) bool {

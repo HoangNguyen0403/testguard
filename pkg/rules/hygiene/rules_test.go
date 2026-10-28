@@ -305,4 +305,16 @@ func TestSkipRule_Go(t *testing.T) {
 			t.Errorf("expected 0 violations for raw string containing t.Skip, got %d: %+v", len(res), res)
 		}
 	})
+	t.Run("non-test receiver method calling Skip should not be flagged", func(t *testing.T) {
+		src := `package sample
+import "testing"
+type collection struct{}
+func (collection) Skip(int) {}
+func (collection) TestUtility(c collection) { c.Skip(1) }
+func TestReal(t *testing.T) { if false { t.Fatal("failure") } }`
+		res := rule.CheckFile("skip_signature_test.go", src)
+		if len(res) != 0 {
+			t.Errorf("expected 0 violations for non-test receiver method Skip, got %d: %+v", len(res), res)
+		}
+	})
 }

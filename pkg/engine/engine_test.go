@@ -1189,3 +1189,46 @@ it('empty test without assertions', () => {
 		t.Fatalf("expected exactly 2 GUARD-UNIV-ZERO findings, got %d: %+v", len(zeroFindings), zeroFindings)
 	}
 }
+func TestF1_TSHelperCommentsAndMemberCalls(t *testing.T) {
+	eng := engine.New()
+
+	t.Run("commented helper declaration not credited", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "comment_helper.test.ts")
+		_ = os.WriteFile(p, []byte("/*\nfunction check() { expect(actual).toBe(2); }\n*/\nit('hollow', () => { check(); });"), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO violation, got %v", res.Violations)
+		}
+	})
+
+	t.Run("member method call not credited as top-level helper", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := filepath.Join(tmpDir, "property_helper.test.ts")
+		_ = os.WriteFile(p, []byte("function check() { expect(actual).toBe(2); }\nit('hollow', () => { const obj = { check() {} }; obj.check(); });"), 0644)
+		res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(res.Violations) != 1 || res.Violations[0].RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected 1 GUARD-UNIV-ZERO violation, got %v", res.Violations)
+		}
+	})
+}
+
+func TestF2_TSMultilineExpressionArrow(t *testing.T) {
+	eng := engine.New()
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "multiline_helper.test.ts")
+	_ = os.WriteFile(p, []byte("const check = () =>\n  (\n    expect(actual).toBe(2)\n  );\nit('asserting', () => { check(); });"), 0644)
+	res, err := eng.Run(engine.Options{TargetPaths: []string{p}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Violations) != 0 {
+		t.Errorf("expected 0 violations for asserting multiline helper, got %v", res.Violations)
+	}
+}

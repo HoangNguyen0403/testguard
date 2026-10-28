@@ -1027,11 +1027,13 @@ func (m *MockRepo) EXPECT() *MockRepo { return m }
 
 type MySuite struct {
 	suite.Suite
-	repo MockRepo
+	ctrl *gomock.Controller
+	repo *MockRepo
 }
 
 func (s *MySuite) SetupTest() {
-	_ = gomock.NewController(s.T())
+	s.ctrl = gomock.NewController(s.T())
+	s.repo = mocks.NewMockRepo(s.ctrl)
 }
 
 func (s *MySuite) TestRepo() {
@@ -1103,5 +1105,239 @@ func TestSubtestDelegation(t *testing.T) {
 	}
 	if len(units[0].Assertions) != 2 {
 		t.Errorf("expected 2 helper assertions, got %v", units[0].Assertions)
+	}
+}
+
+func TestF9_PackageQualifiedMockConstructor(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"go.uber.org/mock/gomock"
+	"example.test/mocks"
+)
+
+func TestMock(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	repo := mocks.NewMockRepo(ctrl)
+	repo.EXPECT().Fetch().Return(2)
+	_ = repo.Fetch()
+}
+`)
+	units, err := adapter.LocateTests(source, "mock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "verify:gomock" {
+		t.Errorf("expected [verify:gomock], got %v", units[0].Assertions)
+	}
+}
+
+func TestR1_MockProvenance_ClosureAndPerCaseSetup(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"go.uber.org/mock/gomock"
+	"example.test/mocks"
+)
+
+func TestMockInClosureAndSetup(t *testing.T) {
+	cases := []struct {
+		name string
+		mock func(m *mocks.MockRepo)
+	}{
+		{
+			name: "success",
+			mock: func(m *mocks.MockRepo) {
+				m.EXPECT().Fetch().Return(2)
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockRepo(ctrl)
+			tc.mock(mockRepo)
+		})
+	}
+}
+`)
+	units, err := adapter.LocateTests(source, "table_mock_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) == 0 {
+		t.Errorf("expected verify:gomock assertion from mock provenance, got %v", units[0].Assertions)
+	}
+}
+
+func TestF8_SuiteAssertionAlias_ExpandedMethodSet(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/stretchr/testify/suite"
+)
+
+type S struct {
+	suite.Suite
+}
+
+func (s *S) TestAsserting() {
+	a := s.Require()
+	a.ElementsMatch([]int{1}, []int{1})
+}
+
+func TestRunSuite(t *testing.T) {
+	suite.Run(t, new(S))
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_alias_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var sTest *golang.Adapter // find S.TestAsserting
+	_ = sTest
+	found := false
+	for _, u := range units {
+		if u.Name == "S.TestAsserting" {
+			found = true
+			if len(u.Assertions) == 0 || u.Assertions[0] != "ElementsMatch" {
+				t.Errorf("expected ElementsMatch assertion, got %v", u.Assertions)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("S.TestAsserting unit not found among %v", units)
+	}
+}
+
+func TestF5_G4LocalFunctionVariableNotCrossFile(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+type fake struct{}
+func (fake) EXPECT() {}
+
+func TestLocal(t *testing.T) {
+	factory := func(t *testing.T) fake { return fake{} }
+	m := factory(t)
+	m.EXPECT()
+}
+`)
+	units, err := adapter.LocateTests(source, "g4_local_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for hollow local factory, got %v", units[0].Assertions)
+	}
+}
+
+func TestF6_G5SubtestDelegation_LocalEmptyAndShadowedAndUnrelated(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func check(t *testing.T) { t.Fatal("failure") }
+
+type runner struct{}
+func (runner) Run(string, func()) {}
+
+func TestEmpty(t *testing.T) {
+	callback := func(t *testing.T) {}
+	t.Run("empty", callback)
+}
+
+func TestShadow(t *testing.T) {
+	check := func(t *testing.T) {}
+	t.Run("empty", check)
+}
+
+func TestUnrelated(t *testing.T) {
+	var r runner
+	callback := func() {}
+	r.Run("empty", callback)
+}
+`)
+	units, err := adapter.LocateTests(source, "g5_edge_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, u := range units {
+		if len(u.Assertions) != 0 {
+			t.Errorf("expected 0 assertions for %s, got %v", u.Name, u.Assertions)
+		}
+	}
+}
+
+func TestF7_G3SuiteLifecycle_ConnectedVsUnrelatedField(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	"github.com/stretchr/testify/suite"
+	"go.uber.org/mock/gomock"
+	"example.test/mocks"
+)
+
+type S struct {
+	suite.Suite
+	ctrl *gomock.Controller
+	repo *mocks.MockRepo
+	unused *mocks.MockRepo
+}
+
+func (s *S) SetupTest() {
+	s.ctrl = gomock.NewController(s.T())
+	s.repo = mocks.NewMockRepo(s.ctrl)
+}
+
+func (s *S) TestConnected() {
+	s.repo.EXPECT().Fetch().Return(2)
+}
+
+func (s *S) TestUnrelated() {
+	s.unused.EXPECT()
+}
+
+func TestRunS(t *testing.T) {
+	suite.Run(t, new(S))
+}
+`)
+	units, err := adapter.LocateTests(source, "suite_lifecycle_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var connectedAssertions, unrelatedAssertions []string
+	for _, u := range units {
+		if u.Name == "S.TestConnected" {
+			connectedAssertions = u.Assertions
+		} else if u.Name == "S.TestUnrelated" {
+			unrelatedAssertions = u.Assertions
+		}
+	}
+	if len(connectedAssertions) == 0 || connectedAssertions[0] != "verify:gomock" {
+		t.Errorf("expected [verify:gomock] for S.TestConnected, got %v", connectedAssertions)
+	}
+	if len(unrelatedAssertions) != 0 {
+		t.Errorf("expected 0 assertions for S.TestUnrelated, got %v", unrelatedAssertions)
 	}
 }

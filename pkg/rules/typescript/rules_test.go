@@ -232,6 +232,34 @@ func TestReactSleepRule_EvaluateFile(t *testing.T) {
 			expectedSeverity:   models.SeverityWarning,
 			expectedDelay:      "100",
 		},
+		{
+			name:    "false delay is ignored",
+			fileSrc: "describe('test', () => { it('false delay', async () => { await new Promise(r => setTimeout(r, false)); }); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "false delay",
+					FilePath:  "components/UserProfile.test.tsx",
+					StartLine: 100,
+					Kind:      "unit",
+					RawBody:   "await new Promise(r => setTimeout(r, false));\nexpect(true).toBe(true);",
+				},
+			},
+			expectedViolations: 0,
+		},
+		{
+			name:    "commented zero is ignored",
+			fileSrc: "describe('test', () => { it('commented zero', async () => { await new Promise(r => setTimeout(r, 0 /* flush */)); }); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "commented zero",
+					FilePath:  "components/UserProfile.test.tsx",
+					StartLine: 110,
+					Kind:      "unit",
+					RawBody:   "await new Promise(r => setTimeout(r, 0 /* flush */));\nexpect(true).toBe(true);",
+				},
+			},
+			expectedViolations: 0,
+		},
 	}
 
 	checker := typescript.NewReactSleepRule()

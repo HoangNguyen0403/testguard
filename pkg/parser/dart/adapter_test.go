@@ -342,6 +342,40 @@ void verifyTrackingLater(String step) {
 	}
 }
 
+func TestR2_DartHelper_InsideGroupWithNamedParamsAndMultiLine(t *testing.T) {
+	source := []byte(`
+void main() {
+  group('tracking group', () {
+    void verifyTrackingBehavior({
+      required String expectedSource,
+      required String buttonFrom,
+    }) {
+      verify(() => repo.setVisitSource(source: expectedSource)).called(1);
+      verify(() => mixpanel.trackEvent(eventName: 'x', properties: any(named: 'properties'))).called(1);
+    }
+
+    testWidgets('tracks button click', (tester) async {
+      verifyTrackingBehavior(
+        expectedSource: 'home',
+        buttonFrom: 'submit_button',
+      );
+    });
+  });
+}
+`)
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "tracking_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) == 0 {
+		t.Errorf("expected helper:verifyTrackingBehavior assertion, got 0 assertions: %+v", units[0])
+	}
+}
+
 func TestBlocTest_SetUpEndingWithSemicolon_FullBodyExtracted(t *testing.T) {
 	source := []byte(`
 void main() {

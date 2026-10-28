@@ -79,6 +79,34 @@ func TestHardWaitRule_EvaluateFile(t *testing.T) {
 			expectedViolations: 0,
 		},
 		{
+			name:     "TS E2E setTimeout with delay false is ignored",
+			filePath: "e2e/false_delay.spec.ts",
+			fileSrc:  "test('false delay', async () => { setTimeout(r, false); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "false delay",
+					FilePath:  "e2e/false_delay.spec.ts",
+					StartLine: 45,
+					RawBody:   "setTimeout(r, false);",
+				},
+			},
+			expectedViolations: 0,
+		},
+		{
+			name:     "TS E2E setTimeout with delay 0 and comments is ignored",
+			filePath: "e2e/commented_zero.spec.ts",
+			fileSrc:  "test('commented zero', async () => { setTimeout(r, 0 /* flush */); });",
+			units: []parser.TestUnit{
+				{
+					Name:      "commented zero",
+					FilePath:  "e2e/commented_zero.spec.ts",
+					StartLine: 48,
+					RawBody:   "setTimeout(r, 0 /* flush */);",
+				},
+			},
+			expectedViolations: 0,
+		},
+		{
 			name:     "Dart Future.delayed in test body flags Warning",
 			filePath: "integration_test/app_test.dart",
 			fileSrc:  "testWidgets('app launches', (tester) async { await Future.delayed(const Duration(seconds: 2)); });",

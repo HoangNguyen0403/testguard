@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Traversal automatically skips linked git worktrees (subdirectories containing `.git` file pointing to worktrees) with reason `linked_worktree`.
   - Added `vendor/` and `third_party/` directories to default skipped directory set (`default_directory`).
 - **Zero-Assertion Accuracy Overhaul**:
-  - **Go**: `findExecutableAssertions` now identifies assertions in `t.Run` closures, resolves testify suite runner (`suite_runner`) units and suite receiver methods, and inspects one-hop same-file helpers taking `*testing.T`/`testing.TB`, gomock controller expectations, and sqlmock `ExpectationsWereMet`.
+  - **Go**: `findExecutableAssertions` now identifies assertions in `t.Run` closures, resolves testify suite runner (`suite_runner`) units and in-file embedded suite receiver methods (`suite.Suite`), inspects one-hop same-file helpers taking `*testing.T`/`testing.TB`, and tracks gomock controller expectations with package-qualified mock constructors and mock provenance. Checked sqlmock results are recognized through their actual assertion/failure branch (`t.Fatal`/`t.Error`/`require`), not by verification call alone.
+  - **Accepted Limitations**: Split-file testify suites are not analyzed (only in-file structs embedding `suite.Suite` qualify); cross-file helpers are not resolved except the documented external mock-factory and `t.Run` delegation policies.
   - **TypeScript / JavaScript**: Paren-aware raw body extraction for expression-bodied tests (`it('x', () => expect(a).toBe(1))`) and one-hop same-file helper resolution (`expectCartEmpty()`).
   - **Dart**: One-hop same-file helper resolution appending `helper:<name>` assertions; string/comment-aware paren matching for `blocTest` argument bodies preventing mid-setUp truncation.
 - **Rule Refinements & Severity Adjustments**:

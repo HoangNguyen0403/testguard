@@ -150,6 +150,38 @@ func TestPrecisionCorpus(t *testing.T) {
 			expected:      nil,
 			negativeFiles: []string{"worktree_test.go", "vendor_test.go"},
 		},
+		{
+			name:     "Go: gomock in closure with package-qualified constructor and setup func (R1)",
+			dir:      "testdata/corpus/go_gomock_closure_provenance",
+			language: "Go",
+			expected: nil,
+		},
+		{
+			name:     "Dart: helper inside group with named params and multiline signature (R2)",
+			dir:      "testdata/corpus/dart_group_helper_named",
+			language: "Dart",
+			expected: nil,
+		},
+		{
+			name:     "Go: table with positional strings not dropped as name (R3 / F10 negative)",
+			dir:      "testdata/corpus/go_table_positional_strings",
+			language: "Go",
+			expected: nil,
+		},
+		{
+			name:     "TS: multiline expression arrow helper (F2 negative)",
+			dir:      "testdata/corpus/ts_multiline_arrow",
+			language: "TypeScript",
+			expected: nil,
+		},
+		{
+			name:     "TS: commented-out helper declaration (F1 positive)",
+			dir:      "testdata/corpus/ts_comment_helper_zero",
+			language: "TypeScript",
+			expected: []expectedFinding{
+				{RuleID: "GUARD-UNIV-ZERO", FileBasename: "comment_helper.test.ts", Language: "TypeScript"},
+			},
+		},
 
 		// --- 2. Positive cases (exact findings expected / true positives) ---
 		{
