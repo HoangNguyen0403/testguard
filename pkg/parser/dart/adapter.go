@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	blocTestRegex       = regexp.MustCompile(`(?s)blocTest\s*(?:<[^>]+>)?\s*\(\s*['"]([^'"]+)['"]\s*,\s*(.*?)\);\s*(?:\n|$)`)
+	blocTestHeaderRegex = regexp.MustCompile(`(?s)\bblocTest\s*(?:<[^>]+>)?\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,`)
 	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
 	seedRegex           = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
 	actRegex            = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
@@ -73,10 +73,28 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	}
 
 	// 1. Locate blocTest invocations
-	blocMatches := blocTestRegex.FindAllStringSubmatchIndex(src, -1)
+	blocMatches := blocTestHeaderRegex.FindAllStringSubmatchIndex(src, -1)
 	for _, m := range blocMatches {
-		testName := src[m[2]:m[3]]
-		argsBody := src[m[4]:m[5]]
+		var testName string
+		if m[2] != -1 {
+			testName = src[m[2]:m[3]]
+		} else if m[4] != -1 {
+			testName = src[m[4]:m[5]]
+		}
+
+		// m[0] is the start of "blocTest". Find the opening paren of the call.
+		openParenRel := strings.Index(src[m[0]:], "(")
+		if openParenRel == -1 {
+			continue
+		}
+		openParen := m[0] + openParenRel
+		closeParen := parser.FindMatchingParen(src, openParen)
+		if closeParen == -1 {
+			continue
+		}
+
+		// argsBody is from after the comma following the test name (m[1]) up to closeParen
+		argsBody := strings.TrimSpace(src[m[1]:closeParen])
 
 		unit := parser.TestUnit{
 			Name:       testName,

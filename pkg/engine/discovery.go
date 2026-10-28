@@ -26,6 +26,7 @@ func DiscoverModules(rootDir string) ([]parser.ModuleRoot, error) {
 			if path != rootDir && (strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist") {
 				return filepath.SkipDir
 			}
+
 			return nil
 		}
 
@@ -67,6 +68,21 @@ func DiscoverModules(rootDir string) ([]parser.ModuleRoot, error) {
 	})
 
 	return modules, err
+}
+
+// isLinkedGitWorktree checks if dir contains a .git regular file whose content starts with "gitdir:" and contains "/worktrees/".
+func isLinkedGitWorktree(dir string) bool {
+	gitPath := filepath.Join(dir, ".git")
+	fi, err := os.Lstat(gitPath)
+	if err != nil || fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return false
+	}
+	content := strings.TrimSpace(string(data))
+	return strings.HasPrefix(content, "gitdir:") && strings.Contains(content, "/worktrees/")
 }
 
 // isTestFileName checks if a file name matches any supported test naming convention.
@@ -241,11 +257,19 @@ func DiscoverScope(paths []string, adapter parser.LanguageAdapter, failTraversal
 			if d.IsDir() {
 				if path != trimmed {
 					name := d.Name()
-					if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist" {
+					if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "third_party" || name == "build" || name == "dist" {
 						norm := normalizePath(path)
 						if !excludedMap[norm] {
 							excludedMap[norm] = true
 							result.Excluded = append(result.Excluded, models.ExcludedPath{Path: norm, Reason: "default_directory"})
+						}
+						return filepath.SkipDir
+					}
+					if isLinkedGitWorktree(path) {
+						norm := normalizePath(path)
+						if !excludedMap[norm] {
+							excludedMap[norm] = true
+							result.Excluded = append(result.Excluded, models.ExcludedPath{Path: norm, Reason: "linked_worktree"})
 						}
 						return filepath.SkipDir
 					}

@@ -13,14 +13,14 @@ import (
 )
 
 var (
-	fakeTimersRegex      = regexp.MustCompile(`useFakeTimers\s*\(`)
-	waitForTimeoutRegex  = regexp.MustCompile(`\bwaitForTimeout\s*\(`)
-	setTimeoutRegex      = regexp.MustCompile(`\bsetTimeout\s*\(`)
-	mockCallRegex        = regexp.MustCompile(`\b(?:mockImplementation|mockImplementationOnce|mockReturnValue|mockReturnValueOnce|mockResolvedValue|mockRejectedValue)\s*\(`)
-	classDeclRegex       = regexp.MustCompile(`\bclass\s+\w+`)
-	futureDelayedRegex   = regexp.MustCompile(`\bFuture\.delayed\s*\(`)
-	sleepRegex           = regexp.MustCompile(`\bsleep\s*\(`)
-	dartMockStubRegex    = regexp.MustCompile(`\b(?:when|thenAnswer)\s*\(`)
+	fakeTimersRegex     = regexp.MustCompile(`useFakeTimers\s*\(`)
+	waitForTimeoutRegex = regexp.MustCompile(`\bwaitForTimeout\s*\(`)
+	setTimeoutRegex     = regexp.MustCompile(`\bsetTimeout\s*\(`)
+	mockCallRegex       = regexp.MustCompile(`\b(?:mockImplementation|mockImplementationOnce|mockReturnValue|mockReturnValueOnce|mockResolvedValue|mockRejectedValue)\s*\(`)
+	classDeclRegex      = regexp.MustCompile(`\bclass\s+\w+`)
+	futureDelayedRegex  = regexp.MustCompile(`\bFuture\.delayed\s*\(`)
+	sleepRegex          = regexp.MustCompile(`\bsleep\s*\(`)
+	dartMockStubRegex   = regexp.MustCompile(`\b(?:when|thenAnswer)\s*\(`)
 )
 
 // HardWaitRule traps arbitrary sleeps and hard waits in E2E tests (Playwright, Flutter).

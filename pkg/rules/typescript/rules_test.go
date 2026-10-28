@@ -55,17 +55,21 @@ func TestReactArbitrarySleepRule(t *testing.T) {
 		Name:      "renders user details",
 		FilePath:  "components/UserProfile.test.tsx",
 		StartLine: 35,
+		Kind:      "unit",
 		RawBody:   "render(<UserProfile />);\nawait new Promise((r) => setTimeout(r, 1000));\nexpect(screen.getByText('User')).toBeInTheDocument();",
 	}
 
 	checker := typescript.NewReactSleepRule()
-	violations := checker.Evaluate(unit)
+	violations := checker.EvaluateFile([]parser.TestUnit{unit}, unit.RawBody)
 
 	if len(violations) != 1 {
 		t.Fatalf("expected 1 arbitrary sleep violation, got %d", len(violations))
 	}
 	if violations[0].RuleID != "GUARD-REACT-02" {
 		t.Errorf("expected GUARD-REACT-02, got %s", violations[0].RuleID)
+	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected Warning severity, got %s", violations[0].Severity)
 	}
 }
 

@@ -14,11 +14,11 @@ const (
 
 // Violation represents an individual test quality or boundary violation found in a source file.
 type Violation struct {
-	RuleID      string   `json:"rule_id"`
-	Severity    Severity `json:"severity"`
-	FilePath    string   `json:"file_path"`
-	LineNumber  int      `json:"line_number"`
-	Column      int      `json:"column"`
-	Message     string   `json:"message"`
-	Suggestion  string   `json:"suggestion"`
+	RuleID     string   `json:"rule_id"`
+	Severity   Severity `json:"severity"`
+	FilePath   string   `json:"file_path"`
+	LineNumber int      `json:"line_number"`
+	Column     int      `json:"column"`
+	Message    string   `json:"message"`
+	Suggestion string   `json:"suggestion"`
 }

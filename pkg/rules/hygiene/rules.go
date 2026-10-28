@@ -15,9 +15,9 @@ var (
 	numberRegex = regexp.MustCompile(`^-?\d+(?:\.\d+)?$`)
 	stringRegex = regexp.MustCompile(`^(?:"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|` + "`" + `[^` + "`" + `\\]*(?:\\.[^` + "`" + `\\]*)*` + "`" + `)$`)
 
-	strLit    = `(?:"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|` + "`" + `[^` + "`" + `\\]*(?:\\.[^` + "`" + `\\]*)*` + "`" + `)`
-	parenArg  = `(?:` + strLit + `|[^()]+?)`
-	commaArg  = `(?:` + strLit + `|[^,()]+?)`
+	strLit   = `(?:"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|` + "`" + `[^` + "`" + `\\]*(?:\\.[^` + "`" + `\\]*)*` + "`" + `)`
+	parenArg = `(?:` + strLit + `|[^()]+?)`
+	commaArg = `(?:` + strLit + `|[^,()]+?)`
 
 	// TS/JS tautology patterns
 	tsExpectSameRegex = regexp.MustCompile(`expect\s*\(\s*(` + parenArg + `)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*(` + parenArg + `)\s*\)`)
@@ -189,10 +189,10 @@ func NewSkipRule() *SkipRule {
 }
 
 var (
-	tsSkipRegex   = regexp.MustCompile(`^(?:it\.skip|test\.skip|describe\.skip|xit|xtest|xdescribe)\s*\(`)
-	dartSkipTrue  = regexp.MustCompile(`^skip\s*:\s*true\b`)
-	dartSkipStr   = regexp.MustCompile(`^skip\s*:\s*(?:'[^']*'|"[^"]*")`)
-	goTestFuncRe  = regexp.MustCompile(`func\s+Test\w*\s*\(\s*(\w+)\s+\*testing\.T\s*\)`)
+	tsSkipRegex  = regexp.MustCompile(`^(?:it\.skip|test\.skip|describe\.skip|xit|xtest|xdescribe)\s*\(`)
+	dartSkipTrue = regexp.MustCompile(`^skip\s*:\s*true\b`)
+	dartSkipStr  = regexp.MustCompile(`^skip\s*:\s*(?:'[^']*'|"[^"]*")`)
+	goTestFuncRe = regexp.MustCompile(`func\s+Test\w*\s*\(\s*(\w+)\s+\*testing\.T\s*\)`)
 )
 
 func (r *SkipRule) CheckFile(filePath string, src string) []models.Violation {

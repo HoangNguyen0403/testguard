@@ -296,7 +296,7 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 		Short: "Display self-contained rationale, remediation, and code examples for a rule",
 		Example: `  testguard explain GUARD-UNIV-ZERO
   testguard explain GUARD-DART-SEED-ECHO
-  testguard explain GUARD-DART-UNCOVERED-MUTATION`,
+  testguard explain GUARD-UNIV-TAUTOLOGY`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			doc, found := docs.Explain(args[0])

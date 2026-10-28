@@ -14,7 +14,9 @@ import (
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 	goparseradapter "github.com/HoangNguyen0403/testguard/pkg/parser/golang"
 	dartrules "github.com/HoangNguyen0403/testguard/pkg/rules/dart"
+	"github.com/HoangNguyen0403/testguard/pkg/rules/e2e"
 	gorules "github.com/HoangNguyen0403/testguard/pkg/rules/golang"
+	"github.com/HoangNguyen0403/testguard/pkg/rules/hygiene"
 	mobilerules "github.com/HoangNguyen0403/testguard/pkg/rules/mobile"
 	tsrules "github.com/HoangNguyen0403/testguard/pkg/rules/typescript"
 )
@@ -56,16 +58,20 @@ type Engine struct {
 	cloneDetect  *clone.Detector
 	namingDetect *naming.Detector
 
+	// Universal hygiene rules
+	tautologyRule *hygiene.TautologyRule
+	skipRule      *hygiene.SkipRule
+
+	// E2E rules
+	hardWaitRule *e2e.HardWaitRule
+
 	// Dart / Flutter rules
-	seedEchoRule          *dartrules.SeedEchoRule
-	uncoveredMutationRule *dartrules.UncoveredMutationRule
-	disguisedMirrorRule   *dartrules.DisguisedMirrorRule
-	mockEchoRule          *dartrules.MockEchoRule
-	blocDuplicateRule     *dartrules.BlocDuplicateRule
+	seedEchoRule      *dartrules.SeedEchoRule
+	mockEchoRule      *dartrules.MockEchoRule
+	blocDuplicateRule *dartrules.BlocDuplicateRule
 
 	// Go rules
 	domainPurityRule   *gorules.DomainPurityRule
-	portMockingRule    *gorules.PortMockingRule
 	tableDuplicateRule *gorules.TableDuplicateRule
 
 	// TypeScript / Fullstack rules
@@ -87,14 +93,16 @@ func New() *Engine {
 		cloneDetect:  clone.New(),
 		namingDetect: naming.New(),
 
-		seedEchoRule:          dartrules.NewSeedEchoRule(),
-		uncoveredMutationRule: dartrules.NewUncoveredMutationRule(),
-		disguisedMirrorRule:   dartrules.NewDisguisedMirrorRule(),
-		mockEchoRule:          dartrules.NewMockEchoRule(),
-		blocDuplicateRule:     dartrules.NewBlocDuplicateRule(),
+		tautologyRule: hygiene.NewTautologyRule(),
+		skipRule:      hygiene.NewSkipRule(),
+
+		hardWaitRule: e2e.NewHardWaitRule(),
+
+		seedEchoRule:      dartrules.NewSeedEchoRule(),
+		mockEchoRule:      dartrules.NewMockEchoRule(),
+		blocDuplicateRule: dartrules.NewBlocDuplicateRule(),
 
 		domainPurityRule:   gorules.NewDomainPurityRule(),
-		portMockingRule:    gorules.NewPortMockingRule(),
 		tableDuplicateRule: gorules.NewTableDuplicateRule(),
 
 		nestControllerEchoRule: tsrules.NewNestControllerEchoRule(),
@@ -107,11 +115,49 @@ func New() *Engine {
 }
 
 var (
-	tsTestRegex           = regexp.MustCompile(`(?m)^[ \t]*(?:it|test)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')`)
+	tsTestRegex           = regexp.MustCompile(`(?m)^[ \t]*(?:it|test)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,`)
 	ktTestRegex           = regexp.MustCompile(`(?m)^[ \t]*@Test\s+(?:fun\s+)?(\w+)`)
 	swiftTestRegex        = regexp.MustCompile(`(?m)^[ \t]*func\s+(test\w+)\s*\(`)
 	genericAssertionRegex = regexp.MustCompile(`(?i)(?:assert\.|require\.|t\.(?:Error|Fatal|Fail)|expect\(|verify\(|verifyNever\(|XCTAssert)`)
 )
+
+var (
+	// Helper declaration regexes in TS/JS files
+	tsFunctionHelperRegex = regexp.MustCompile(`(?m)\b(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\([^)]*\)\s*\{`)
+	tsVarArrowHelperRegex = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>\s*\{`)
+	tsVarFuncHelperRegex  = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s+)?function\s*\([^)]*\)\s*\{`)
+)
+
+func collectTSAssertingHelpers(src string) map[string]bool {
+	helpers := make(map[string]bool)
+
+	scanRegex := func(re *regexp.Regexp) {
+		matches := re.FindAllStringSubmatchIndex(src, -1)
+		for _, m := range matches {
+			name := src[m[2]:m[3]]
+			// open brace is the last byte of the match (m[1]-1)
+			openBrace := m[1] - 1
+			if openBrace >= 0 && openBrace < len(src) && src[openBrace] == '{' {
+				closeBrace := parser.FindMatchingBrace(src, openBrace)
+				if closeBrace != -1 {
+					body := src[openBrace : closeBrace+1]
+					if genericAssertionRegex.MatchString(body) {
+						helpers[name] = true
+					}
+				}
+			}
+		}
+	}
+
+	scanRegex(tsFunctionHelperRegex)
+	scanRegex(tsVarArrowHelperRegex)
+	scanRegex(tsVarFuncHelperRegex)
+	return helpers
+}
+
+func isTSOrJS(filePath string) bool {
+	return strings.HasSuffix(filePath, ".ts") || strings.HasSuffix(filePath, ".tsx") || strings.HasSuffix(filePath, ".js") || strings.HasSuffix(filePath, ".jsx")
+}
 
 // parseGenericTestUnits extracts test units and function bodies for non-Dart languages.
 func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
@@ -139,15 +185,20 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 		return line
 	}
 	var targetRegex *regexp.Regexp
-	switch {
-	case strings.HasSuffix(filePath, ".ts") || strings.HasSuffix(filePath, ".tsx") || strings.HasSuffix(filePath, ".js") || strings.HasSuffix(filePath, ".jsx"):
+	isTS := isTSOrJS(filePath)
+	var assertingHelpers map[string]bool
+	if isTS {
 		targetRegex = tsTestRegex
-	case strings.HasSuffix(filePath, ".kt"):
-		targetRegex = ktTestRegex
-	case strings.HasSuffix(filePath, ".swift"):
-		targetRegex = swiftTestRegex
-	default:
-		targetRegex = tsTestRegex
+		assertingHelpers = collectTSAssertingHelpers(src)
+	} else {
+		switch {
+		case strings.HasSuffix(filePath, ".kt"):
+			targetRegex = ktTestRegex
+		case strings.HasSuffix(filePath, ".swift"):
+			targetRegex = swiftTestRegex
+		default:
+			targetRegex = tsTestRegex
+		}
 	}
 
 	matches := targetRegex.FindAllStringSubmatchIndex(src, -1)
@@ -165,13 +216,27 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 		startOffset := m[0]
 		startLine := offsetToLine(startOffset)
 
-		openBrace := strings.Index(src[startOffset:], "{")
 		var body string
-		if openBrace != -1 {
-			openIdx := startOffset + openBrace
-			closeIdx := parser.FindMatchingBrace(src, openIdx)
-			if closeIdx != -1 {
-				body = src[startOffset : closeIdx+1]
+		if isTS {
+			// m[0] is the start of it/test call. Find open paren.
+			openParenRel := strings.Index(src[startOffset:], "(")
+			if openParenRel != -1 {
+				openParen := startOffset + openParenRel
+				closeParen := parser.FindMatchingParen(src, openParen)
+				if closeParen != -1 {
+					// argsBody is from after the comma (m[1]) up to closeParen
+					body = strings.TrimSpace(src[m[1]:closeParen])
+				}
+			}
+		}
+		if body == "" {
+			openBrace := strings.Index(src[startOffset:], "{")
+			if openBrace != -1 {
+				openIdx := startOffset + openBrace
+				closeIdx := parser.FindMatchingBrace(src, openIdx)
+				if closeIdx != -1 {
+					body = src[startOffset : closeIdx+1]
+				}
 			}
 		}
 		if body == "" {
@@ -185,7 +250,15 @@ func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
 
 		var assertions []string
 		if genericAssertionRegex.MatchString(body) {
-			assertions = []string{"assert"}
+			assertions = append(assertions, "assert")
+		}
+		if isTS && len(assertingHelpers) > 0 {
+			for helper := range assertingHelpers {
+				// Check if body calls helper(
+				if strings.Contains(body, helper+"(") {
+					assertions = append(assertions, "helper:"+helper)
+				}
+			}
 		}
 
 		units = append(units, parser.TestUnit{
@@ -326,30 +399,45 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			}}
 		}
 
+		// Hygiene rules for every language
+		for _, u := range units {
+			if u.Kind == "unit" || u.Kind == "bloc" {
+				fileViolations = append(fileViolations, e.tautologyRule.Evaluate(u)...)
+			}
+		}
+		fileViolations = append(fileViolations, e.skipRule.CheckFile(file, string(content))...)
+
 		// 1. Universal checks
 		fileViolations = append(fileViolations, e.zeroAssert.Check(units)...)
 		fileViolations = append(fileViolations, e.cloneDetect.Check(evalUnits)...)
 		fileViolations = append(fileViolations, e.namingDetect.Check(evalUnits)...)
+
 		// 2. Language & Framework rules
+		isE2E := parser.IsE2EFile(file, content)
+
 		if strings.HasSuffix(file, ".dart") {
 			fileViolations = append(fileViolations, e.blocDuplicateRule.Check(units)...)
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.seedEchoRule.Evaluate(u)...)
-				fileViolations = append(fileViolations, e.uncoveredMutationRule.Evaluate(u)...)
-				fileViolations = append(fileViolations, e.disguisedMirrorRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.mockEchoRule.Evaluate(u)...)
+			}
+			if isE2E {
+				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, string(content))...)
 			}
 		} else if strings.HasSuffix(file, ".go") {
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.domainPurityRule.Evaluate(u)...)
-				fileViolations = append(fileViolations, e.portMockingRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.tableDuplicateRule.Evaluate(u)...)
 			}
-		} else if strings.HasSuffix(file, ".ts") || strings.HasSuffix(file, ".tsx") || strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".jsx") {
+		} else if isTSOrJS(file) {
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.nestControllerEchoRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.nestUnmockedDbRule.Evaluate(u)...)
-				fileViolations = append(fileViolations, e.reactSleepRule.Evaluate(u)...)
+			}
+			if isE2E {
+				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, string(content))...)
+			} else {
+				fileViolations = append(fileViolations, e.reactSleepRule.EvaluateFile(units, string(content))...)
 			}
 		} else if strings.HasSuffix(file, ".kt") {
 			for _, u := range units {
@@ -360,7 +448,6 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				fileViolations = append(fileViolations, e.swiftTimeoutRule.Evaluate(u)...)
 			}
 		}
-
 		// 3. Filter suppressed violations
 		for _, v := range fileViolations {
 			if !models.IsSuppressed(suppressions, v.RuleID, v.LineNumber) {

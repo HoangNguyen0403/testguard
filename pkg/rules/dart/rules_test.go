@@ -32,51 +32,6 @@ func TestDetectSeedEcho(t *testing.T) {
 	}
 }
 
-func TestDetectUncoveredLoadingMutation(t *testing.T) {
-	unitWithMissingLoading := parser.TestUnit{
-		Name:       "test_missing_is_fetching",
-		FilePath:   "customer_code_bloc_test.dart",
-		StartLine:  50,
-		Kind:       "bloc",
-		ActBody:    "bloc.add(const CustomerCodeEvent.fetch())",
-		ExpectBody: "[isA<CustomerCodeState>().having((s) => s.userInfo, 'userInfo', fakeUser)]",
-	}
-
-	checker := dart.NewUncoveredMutationRule()
-	violations := checker.Evaluate(unitWithMissingLoading)
-
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 uncovered mutation violation, got %d", len(violations))
-	}
-	if violations[0].RuleID != "GUARD-DART-UNCOVERED-MUTATION" {
-		t.Errorf("expected GUARD-DART-UNCOVERED-MUTATION, got %s", violations[0].RuleID)
-	}
-	if violations[0].Severity != models.SeverityBlocker {
-		t.Errorf("expected Blocker severity, got %s", violations[0].Severity)
-	}
-}
-
-func TestDetectDisguisedMirror(t *testing.T) {
-	unitWithChains := parser.TestUnit{
-		Name:       "test_chains",
-		FilePath:   "customer_code_bloc_test.dart",
-		StartLine:  340,
-		Kind:       "bloc",
-		SeedBody:   "baseState.copyWith(userInfo: fakeUser)",
-		ExpectBody: "[isA<CustomerCodeState>().having((s) => s.hideCustomer, 'hideCustomer', false).having((s) => s.userInfo, 'userInfo', fakeUser).having((s) => s.selectedSalesOrg, 'selectedSalesOrg', fakeSaleOrg).having((s) => s.isFetching, 'isFetching', true)]",
-	}
-
-	checker := dart.NewDisguisedMirrorRule()
-	violations := checker.Evaluate(unitWithChains)
-
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 disguised mirror violation, got %d", len(violations))
-	}
-	if violations[0].RuleID != "GUARD-DART-DISGUISED-MIRROR" {
-		t.Errorf("expected GUARD-DART-DISGUISED-MIRROR, got %s", violations[0].RuleID)
-	}
-}
-
 func TestDetectMockEcho(t *testing.T) {
 	unitWithMockEcho := parser.TestUnit{
 		Name:      "test_mock_echo",

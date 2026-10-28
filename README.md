@@ -125,12 +125,14 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 
 ## 🎯 Supported Ecosystems & Rules
 
-| Language | Test Runners | Key Guardrails |
+| Language / Scope | Test Runners | Key Guardrails |
 |---|---|---|
-| **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps disguised state mirrors, seed echoes, and uncovered loading mutations (`isFetching = true`). |
-| **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models) and port-only mocking. |
-| **TypeScript / Web** | `jest`, `vitest` | Catches shallow mock echoes and snapshot-only test smells. |
-
+| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), exact token duplicates (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), and placeholder test names (`GUARD-UNIV-NAME`). |
+| **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps seed echoes (`GUARD-DART-SEED-ECHO`), identical whole-scenario BLoC duplicates (`GUARD-DART-BLOC-DUPLICATE`), and pass-through mock echoes (`GUARD-DART-MOCK-ECHO`). |
+| **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models: `GUARD-GO-01`) and table-test duplicate input rows (`GUARD-GO-03`). |
+| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps > 0 ms in unit tests (`GUARD-REACT-02`), shallow mock echoes (`GUARD-REACT-01`), NestJS controller echoes & unmocked DB leaks, and massive snapshot-only smells (`GUARD-TS-01`). |
+| **E2E / Integration** | `Playwright`, `Flutter IntegrationTest` | Fixed arbitrary hard waits in end-to-end tests (`GUARD-E2E-01`). |
+| **Mobile (Android/iOS)** | `MockK`, `XCTest` | MockK pass-through echoes, unadvanced coroutines, and excessive expectation timeouts. |
 ---
 
 ## 📄 Documentation

@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [Unreleased]
+
+### Removed
+- **Dead Subcommand**:
+  - Removed dead `testguard init` command and associated `testguard.yaml` starter generation (misleading configuration documentation removed).
+- **Low-Precision Rules Deleted**:
+  - `GUARD-DART-UNCOVERED-MUTATION`: Deleted keyword + literal `isFetching` heuristic rule.
+  - `GUARD-DART-DISGUISED-MIRROR`: Deleted rule penalizing `.having()` on mutated fields.
+  - `GUARD-GO-02`: Deleted port-only mocking rule that flagged legitimate repository/adapter tests using `sqlmock`.
+
+### Changed
+- **Scope Exclusions & Deduplication**:
+  - Traversal automatically skips linked git worktrees (subdirectories containing `.git` file pointing to worktrees) with reason `linked_worktree`.
+  - Added `vendor/` and `third_party/` directories to default skipped directory set (`default_directory`).
+- **Zero-Assertion Accuracy Overhaul**:
+  - **Go**: `findExecutableAssertions` now identifies assertions in `t.Run` closures, resolves testify suite runner (`suite_runner`) units and suite receiver methods, and inspects one-hop same-file helpers taking `*testing.T`/`testing.TB`, gomock controller expectations, and sqlmock `ExpectationsWereMet`.
+  - **TypeScript / JavaScript**: Paren-aware raw body extraction for expression-bodied tests (`it('x', () => expect(a).toBe(1))`) and one-hop same-file helper resolution (`expectCartEmpty()`).
+  - **Dart**: One-hop same-file helper resolution appending `helper:<name>` assertions; string/comment-aware paren matching for `blocTest` argument bodies preventing mid-setUp truncation.
+- **Rule Refinements & Severity Adjustments**:
+  - `GUARD-REACT-02`: Severity changed to Warning. Excludes delay `0` flushes, mock latency callbacks (`mockImplementation`), class bodies, and files using `useFakeTimers()`. Only evaluates non-E2E unit tests.
+  - `GUARD-DART-BLOC-DUPLICATE`: Compares entire `blocTest` scenario arguments (build/setUp/seed/act/expect/skip/verify) after stripping comments and whitespace instead of comparing only act and expect blocks.
+  - `GUARD-UNIV-01` / `GUARD-UNIV-02`: Exact-token duplicates consistently report as `GUARD-UNIV-01` ("Duplicate test body"), while normalized-literal variants report as `GUARD-UNIV-02` ("Similar test structure").
+
+### Added
+- **Hygiene & E2E Rules**:
+  - `GUARD-UNIV-TAUTOLOGY` (Blocker): Flags trivial tautological assertions such as `expect(true).toBe(true)` or `assert.True(t, true)`.
+  - `GUARD-UNIV-SKIP` (Warning): Detects permanently skipped tests (`it.skip`, `skip: true`, unconditional `t.Skip`).
+  - `GUARD-E2E-01` (Warning): Catches arbitrary hard wait timers in E2E tests (`page.waitForTimeout(3000)`, `Future.delayed(2s)`).
+
+---
 ## [0.1.4] - Unreleased
 
 ### Breaking Changes

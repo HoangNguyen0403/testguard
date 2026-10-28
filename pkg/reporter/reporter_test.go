@@ -221,7 +221,7 @@ func TestTerminalReporterMonorepoBreakdown(t *testing.T) {
 			Message:    "Duplicate table row.",
 		},
 		{
-			RuleID:     "GUARD-DART-UNCOVERED-MUTATION",
+			RuleID:     "GUARD-UNIV-TAUTOLOGY",
 			Severity:   models.SeverityBlocker,
 			FilePath:   "datasource/ezrx/eZRx-Mobile/test/bloc_test.dart",
 			LineNumber: 100,

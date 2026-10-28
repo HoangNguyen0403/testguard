@@ -22,14 +22,14 @@ type ProgressConfig struct {
 
 // ProgressReporter coordinates live terminal feedback across audit execution phases.
 type ProgressReporter struct {
-	out         io.Writer
-	config      ProgressConfig
-	mu          sync.Mutex
-	frameIdx    int
-	phase       string
-	current     int
-	total       int
-	currentFile string
+	out           io.Writer
+	config        ProgressConfig
+	mu            sync.Mutex
+	frameIdx      int
+	phase         string
+	current       int
+	total         int
+	currentFile   string
 	isFinished    bool
 	renderedPhase string
 	lastRender    time.Time

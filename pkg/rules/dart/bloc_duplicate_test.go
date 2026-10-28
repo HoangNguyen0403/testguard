@@ -128,18 +128,18 @@ func TestBlocDuplicate_IdenticalWholeScenario_ExactlyOneFinding(t *testing.T) {
 func TestBlocDuplicate_DifferentBuildOrSetUp_NoFinding(t *testing.T) {
 	units := []parser.TestUnit{
 		{
-			Name:       "bloc_test_setup_a",
-			FilePath:   "search_bloc_test.dart",
-			StartLine:  10,
-			Kind:       "bloc",
-			RawBody:    "setUp: () => setUpMockA(),\nbuild: () => SearchBloc(),\nact: (bloc) => bloc.add(SearchEvent()),\nexpect: () => [SearchState.ready()],",
+			Name:      "bloc_test_setup_a",
+			FilePath:  "search_bloc_test.dart",
+			StartLine: 10,
+			Kind:      "bloc",
+			RawBody:   "setUp: () => setUpMockA(),\nbuild: () => SearchBloc(),\nact: (bloc) => bloc.add(SearchEvent()),\nexpect: () => [SearchState.ready()],",
 		},
 		{
-			Name:       "bloc_test_setup_b",
-			FilePath:   "search_bloc_test.dart",
-			StartLine:  30,
-			Kind:       "bloc",
-			RawBody:    "setUp: () => setUpMockB(),\nbuild: () => SearchBloc(),\nact: (bloc) => bloc.add(SearchEvent()),\nexpect: () => [SearchState.ready()],",
+			Name:      "bloc_test_setup_b",
+			FilePath:  "search_bloc_test.dart",
+			StartLine: 30,
+			Kind:      "bloc",
+			RawBody:   "setUp: () => setUpMockB(),\nbuild: () => SearchBloc(),\nact: (bloc) => bloc.add(SearchEvent()),\nexpect: () => [SearchState.ready()],",
 		},
 	}
 
@@ -154,18 +154,18 @@ func TestBlocDuplicate_DifferentBuildOrSetUp_NoFinding(t *testing.T) {
 func TestBlocDuplicate_LeadingTestNameStripped(t *testing.T) {
 	units := []parser.TestUnit{
 		{
-			Name:       "First Test Name",
-			FilePath:   "search_bloc_test.dart",
-			StartLine:  10,
-			Kind:       "bloc",
-			RawBody:    "'First Test Name', build: () => SearchBloc(), act: (bloc) => bloc.add(const SearchEvent()), expect: () => [SearchState.ready()],",
+			Name:      "First Test Name",
+			FilePath:  "search_bloc_test.dart",
+			StartLine: 10,
+			Kind:      "bloc",
+			RawBody:   "'First Test Name', build: () => SearchBloc(), act: (bloc) => bloc.add(const SearchEvent()), expect: () => [SearchState.ready()],",
 		},
 		{
-			Name:       "Second Test Name",
-			FilePath:   "search_bloc_test.dart",
-			StartLine:  30,
-			Kind:       "bloc",
-			RawBody:    "'Second Test Name', build: () => SearchBloc(), act: (bloc) => bloc.add(const SearchEvent()), expect: () => [SearchState.ready()],",
+			Name:      "Second Test Name",
+			FilePath:  "search_bloc_test.dart",
+			StartLine: 30,
+			Kind:      "bloc",
+			RawBody:   "'Second Test Name', build: () => SearchBloc(), act: (bloc) => bloc.add(const SearchEvent()), expect: () => [SearchState.ready()],",
 		},
 	}
 

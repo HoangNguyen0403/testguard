@@ -294,15 +294,15 @@ void verifyTrackingLater(String step) {
 	}
 
 	expected := map[string][]string{
-		"cart is empty":                           {"helper:verifyCartEmpty"},
-		"cart setup only":                         {},
-		"resolves helper defined later":           {"helper:verifyTrackingLater"},
-		"calls arrow helper":                      {"helper:verifyTrackingArrow"},
-		"async helper call":                       {"helper:expectCartEmptyAsync"},
-		"checkCondition":                          {},
-		"one-hop only ignores transitive helper":  {},
-		"direct assertion and helper together":    {"helper:verifyCartEmpty", "expect"},
-		"nested helper inside main":               {"helper:nestedInsideMainHelper"},
+		"cart is empty":                          {"helper:verifyCartEmpty"},
+		"cart setup only":                        {},
+		"resolves helper defined later":          {"helper:verifyTrackingLater"},
+		"calls arrow helper":                     {"helper:verifyTrackingArrow"},
+		"async helper call":                      {"helper:expectCartEmptyAsync"},
+		"checkCondition":                         {},
+		"one-hop only ignores transitive helper": {},
+		"direct assertion and helper together":   {"helper:verifyCartEmpty", "expect"},
+		"nested helper inside main":              {"helper:nestedInsideMainHelper"},
 	}
 	for _, unit := range units {
 		exp, ok := expected[unit.Name]
@@ -319,5 +319,52 @@ void verifyTrackingLater(String step) {
 				t.Errorf("test %q: expected assertion[%d]=%q, got %q", unit.Name, i, a, unit.Assertions[i])
 			}
 		}
+	}
+}
+
+func TestBlocTest_SetUpEndingWithSemicolon_FullBodyExtracted(t *testing.T) {
+	source := []byte(`
+void main() {
+  blocTest<SearchBloc, SearchState>(
+    'search with failure A',
+    setUp: () {
+      when(() => repo.get()).thenAnswer((_) async => const Left(ApiFailure.other('e')));
+      when(() => repo.fallbackA()).thenReturn(1);
+    },
+    build: () => SearchBloc(repo),
+    act: (bloc) => bloc.add(const SearchEvent('a')),
+    expect: () => [SearchState.failureA()],
+  );
+
+  blocTest<SearchBloc, SearchState>(
+    'search with failure B',
+    setUp: () {
+      when(() => repo.get()).thenAnswer((_) async => const Left(ApiFailure.other('e')));
+      when(() => repo.fallbackB()).thenReturn(2);
+    },
+    build: () => SearchBloc(repo),
+    act: (bloc) => bloc.add(const SearchEvent('b')),
+    expect: () => [SearchState.failureB()],
+  );
+}
+`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "search_bloc_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error locating tests: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(units))
+	}
+
+	if units[0].RawBody == units[1].RawBody {
+		t.Fatalf("expected different RawBody for two blocTests with differing later setUp and expect, but got identical: %q", units[0].RawBody)
+	}
+	if !strings.Contains(units[0].RawBody, "fallbackA") {
+		t.Errorf("expected unit 0 RawBody to contain fallbackA, got %q", units[0].RawBody)
+	}
+	if !strings.Contains(units[1].RawBody, "fallbackB") {
+		t.Errorf("expected unit 1 RawBody to contain fallbackB, got %q", units[1].RawBody)
 	}
 }

@@ -11,14 +11,13 @@ import (
 )
 
 var (
-	nestControllerMockRegex = regexp.MustCompile(`mockResolvedValue\s*\(\s*([^,\)]+)\)`)
+	nestControllerMockRegex   = regexp.MustCompile(`mockResolvedValue\s*\(\s*([^,\)]+)\)`)
 	nestControllerExpectRegex = regexp.MustCompile(`expect\s*\(\s*await\s+controller\.\w+\([^)]*\)\s*\)\.(?:resolves\.)?(?:toBe|toEqual)\s*\(\s*([^,\)]+)\)`)
-	nestRealDbModuleRegex   = regexp.MustCompile(`(?i)(?:TypeOrmModule\.forRoot|MongooseModule\.forRoot|SequelizeModule\.forRoot|PrismaModule)`)
-	sleepRegex              = regexp.MustCompile(`(?i)(?:setTimeout\s*\(|new\s+Promise\s*\(\s*(?:\([^)]*\)|r)\s*=>\s*setTimeout)`)
-	fakeTimersRegex         = regexp.MustCompile(`useFakeTimers\s*\(`)
-	setTimeoutRegex         = regexp.MustCompile(`\bsetTimeout\s*\(`)
-	mockCallRegex           = regexp.MustCompile(`\b(?:mockImplementation|mockImplementationOnce|mockReturnValue|mockReturnValueOnce|mockResolvedValue|mockRejectedValue)\s*\(`)
-	classDeclRegex          = regexp.MustCompile(`\bclass\s+\w+`)
+	nestRealDbModuleRegex     = regexp.MustCompile(`(?i)(?:TypeOrmModule\.forRoot|MongooseModule\.forRoot|SequelizeModule\.forRoot|PrismaModule)`)
+	fakeTimersRegex           = regexp.MustCompile(`useFakeTimers\s*\(`)
+	setTimeoutRegex           = regexp.MustCompile(`\bsetTimeout\s*\(`)
+	mockCallRegex             = regexp.MustCompile(`\b(?:mockImplementation|mockImplementationOnce|mockReturnValue|mockReturnValueOnce|mockResolvedValue|mockRejectedValue)\s*\(`)
+	classDeclRegex            = regexp.MustCompile(`\bclass\s+\w+`)
 )
 
 // NestControllerEchoRule flags NestJS controller unit tests that do 1:1 pass-through mock echoing.
@@ -81,24 +80,6 @@ type ReactSleepRule struct{}
 
 func NewReactSleepRule() *ReactSleepRule {
 	return &ReactSleepRule{}
-}
-
-func (r *ReactSleepRule) Evaluate(unit parser.TestUnit) []models.Violation {
-	var violations []models.Violation
-
-	if sleepRegex.MatchString(unit.RawBody) {
-		violations = append(violations, models.Violation{
-			RuleID:     "GUARD-REACT-02",
-			Severity:   models.SeverityBlocker,
-			FilePath:   unit.FilePath,
-			LineNumber: unit.StartLine,
-			Column:     1,
-			Message:    fmt.Sprintf("Arbitrary sleep/setTimeout fragility in '%s': using hardcoded timer delays in test.", unit.Name),
-			Suggestion: "Use React Testing Library's waitFor(...) or async findBy* queries instead of fixed setTimeout sleeps.",
-		})
-	}
-
-	return violations
 }
 
 // EvaluateFile reports real-timer sleeps in unit tests of one file.
