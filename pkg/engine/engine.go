@@ -1,8 +1,9 @@
 package engine
 
 import (
+	"fmt"
 	"os"
-	"regexp"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +14,9 @@ import (
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 	goparseradapter "github.com/HoangNguyen0403/testguard/pkg/parser/golang"
+	"github.com/HoangNguyen0403/testguard/pkg/parser/kotlin"
+	"github.com/HoangNguyen0403/testguard/pkg/parser/swift"
+	"github.com/HoangNguyen0403/testguard/pkg/parser/typescript"
 	dartrules "github.com/HoangNguyen0403/testguard/pkg/rules/dart"
 	"github.com/HoangNguyen0403/testguard/pkg/rules/e2e"
 	gorules "github.com/HoangNguyen0403/testguard/pkg/rules/golang"
@@ -52,8 +56,8 @@ type Result struct {
 
 // Engine coordinates language adapters, universal detectors, and semantic rules.
 type Engine struct {
-	dartAdapter  *dart.Adapter
-	goAdapter    *goparseradapter.Adapter
+	adapters []parser.LanguageAdapter
+
 	zeroAssert   *zeroassert.Detector
 	cloneDetect  *clone.Detector
 	namingDetect *naming.Detector
@@ -61,6 +65,7 @@ type Engine struct {
 	// Universal hygiene rules
 	tautologyRule *hygiene.TautologyRule
 	skipRule      *hygiene.SkipRule
+	focusRule     *hygiene.FocusRule
 
 	// E2E rules
 	hardWaitRule *e2e.HardWaitRule
@@ -69,364 +74,92 @@ type Engine struct {
 	seedEchoRule      *dartrules.SeedEchoRule
 	mockEchoRule      *dartrules.MockEchoRule
 	blocDuplicateRule *dartrules.BlocDuplicateRule
+	vacuousStateRule  *dartrules.VacuousStateRule
 
 	// Go rules
 	domainPurityRule   *gorules.DomainPurityRule
 	tableDuplicateRule *gorules.TableDuplicateRule
+	swallowedErrorRule *gorules.SwallowedErrorRule
+	uncheckedWantRule  *gorules.UncheckedWantRule
 
 	// TypeScript / Fullstack rules
 	nestControllerEchoRule *tsrules.NestControllerEchoRule
 	nestUnmockedDbRule     *tsrules.NestUnmockedDbModuleRule
+	snapshotOnlyRule       *tsrules.SnapshotOnlyRule
+	floatingAssertRule     *tsrules.FloatingAssertRule
+	catchOnlyRule          *tsrules.CatchOnlyRule
+	conditionalAssertRule  *tsrules.ConditionalAssertRule
+	existenceOnlyRule      *tsrules.ExistenceOnlyRule
+	selfMockRule           *tsrules.SelfMockRule
+	mockedSutRule          *tsrules.MockedSutRule
 	reactSleepRule         *tsrules.ReactSleepRule
 
 	// Native Mobile rules
 	kotlinCoroutineRule *mobilerules.KotlinCoroutineAdvanceRule
+	kotlinMockEchoRule  *mobilerules.KotlinMockEchoRule
 	swiftTimeoutRule    *mobilerules.SwiftTimeoutRule
 }
 
 // New creates an initialized testguard engine with all polyglot rules.
 func New() *Engine {
 	return &Engine{
-		dartAdapter:  dart.NewAdapter(),
-		goAdapter:    goparseradapter.NewAdapter(),
+		adapters: []parser.LanguageAdapter{
+			goparseradapter.NewAdapter(),
+			dart.NewAdapter(),
+			typescript.NewAdapter(),
+			kotlin.NewAdapter(),
+			swift.NewAdapter(),
+		},
+
 		zeroAssert:   zeroassert.New(),
 		cloneDetect:  clone.New(),
 		namingDetect: naming.New(),
 
 		tautologyRule: hygiene.NewTautologyRule(),
 		skipRule:      hygiene.NewSkipRule(),
+		focusRule:     hygiene.NewFocusRule(),
 
 		hardWaitRule: e2e.NewHardWaitRule(),
 
 		seedEchoRule:      dartrules.NewSeedEchoRule(),
 		mockEchoRule:      dartrules.NewMockEchoRule(),
 		blocDuplicateRule: dartrules.NewBlocDuplicateRule(),
+		vacuousStateRule:  dartrules.NewVacuousStateRule(),
 
 		domainPurityRule:   gorules.NewDomainPurityRule(),
 		tableDuplicateRule: gorules.NewTableDuplicateRule(),
+		swallowedErrorRule: gorules.NewSwallowedErrorRule(),
+		uncheckedWantRule:  gorules.NewUncheckedWantRule(),
 
 		nestControllerEchoRule: tsrules.NewNestControllerEchoRule(),
 		nestUnmockedDbRule:     tsrules.NewNestUnmockedDbModuleRule(),
+		snapshotOnlyRule:       tsrules.NewSnapshotOnlyRule(),
+		floatingAssertRule:     tsrules.NewFloatingAssertRule(),
+		catchOnlyRule:          tsrules.NewCatchOnlyRule(),
+		conditionalAssertRule:  tsrules.NewConditionalAssertRule(),
+		existenceOnlyRule:      tsrules.NewExistenceOnlyRule(),
+		selfMockRule:           tsrules.NewSelfMockRule(),
+		mockedSutRule:          tsrules.NewMockedSutRule(),
 		reactSleepRule:         tsrules.NewReactSleepRule(),
 
 		kotlinCoroutineRule: mobilerules.NewKotlinCoroutineAdvanceRule(),
+		kotlinMockEchoRule:  mobilerules.NewKotlinMockEchoRule(),
 		swiftTimeoutRule:    mobilerules.NewSwiftTimeoutRule(),
 	}
 }
 
-var (
-	tsTestRegex           = regexp.MustCompile(`(?m)^[ \t]*(?:it|test)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,`)
-	ktTestRegex           = regexp.MustCompile(`(?m)^[ \t]*@Test\s+(?:fun\s+)?(\w+)`)
-	swiftTestRegex        = regexp.MustCompile(`(?m)^[ \t]*func\s+(test\w+)\s*\(`)
-	genericAssertionRegex = regexp.MustCompile(`(?i)(?:assert\.|require\.|t\.(?:Error|Fatal|Fail)|expect\(|verify\(|verifyNever\(|XCTAssert)`)
-)
-
-var (
-	// Helper declaration regexes in TS/JS files
-	tsFunctionHelperRegex = regexp.MustCompile(`(?m)\b(?:async\s+)?function\s+([A-Za-z0-9_$]+)\s*\([^)]*\)\s*\{`)
-	tsVarArrowHelperRegex = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>\s*\{`)
-	tsVarFuncHelperRegex  = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s+)?function\s*\([^)]*\)\s*\{`)
-	tsVarArrowExprRegex   = regexp.MustCompile(`(?m)\b(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z0-9_$]+)\s*=>`)
-)
-
-func blankCommentsAndStrings(src string, isTS bool) string {
-	b := []byte(src)
-	n := len(b)
-	for i := 0; i < n; {
-		if i+1 < n && b[i] == '/' && b[i+1] == '/' {
-			b[i] = ' '
-			b[i+1] = ' '
-			i += 2
-			for i < n && b[i] != '\n' {
-				if b[i] != '\r' {
-					b[i] = ' '
-				}
-				i++
-			}
-			continue
-		}
-		if i+1 < n && b[i] == '/' && b[i+1] == '*' {
-			b[i] = ' '
-			b[i+1] = ' '
-			i += 2
-			for i < n {
-				if i+1 < n && b[i] == '*' && b[i+1] == '/' {
-					b[i] = ' '
-					b[i+1] = ' '
-					i += 2
-					break
-				}
-				if b[i] != '\n' && b[i] != '\r' {
-					b[i] = ' '
-				}
-				i++
-			}
-			continue
-		}
-		if b[i] == '\'' || b[i] == '"' || (isTS && b[i] == '`') {
-			delim := b[i]
-			b[i] = ' '
-			i++
-			for i < n {
-				if b[i] == '\\' {
-					b[i] = ' '
-					if i+1 < n && b[i+1] != '\n' && b[i+1] != '\r' {
-						b[i+1] = ' '
-					}
-					i += 2
-					continue
-				}
-				if b[i] == delim {
-					b[i] = ' '
-					i++
-					break
-				}
-				if (delim == '\'' || delim == '"') && b[i] == '\n' {
-					break
-				}
-				if b[i] != '\n' && b[i] != '\r' {
-					b[i] = ' '
-				}
-				i++
-			}
-			continue
-		}
-		i++
-	}
-	return string(b)
-}
-
-func collectTSAssertingHelpers(src string) map[string]bool {
-	helpers := make(map[string]bool)
-	cleanFullSrc := blankCommentsAndStrings(src, true)
-
-	scanBlock := func(re *regexp.Regexp) {
-		matches := re.FindAllStringSubmatchIndex(src, -1)
-		for _, m := range matches {
-			if m[0] >= len(cleanFullSrc) || cleanFullSrc[m[0]] != src[m[0]] {
-				// Declaration start is inside a comment or string
-				continue
-			}
-			name := src[m[2]:m[3]]
-			openBrace := m[1] - 1
-			if openBrace >= 0 && openBrace < len(src) && src[openBrace] == '{' {
-				closeBrace := parser.FindMatchingTSBrace(src, openBrace)
-				if closeBrace != -1 {
-					body := src[openBrace : closeBrace+1]
-					cleanBody := blankCommentsAndStrings(body, true)
-					if genericAssertionRegex.MatchString(cleanBody) {
-						helpers[name] = true
-					}
-				}
+// adapterFor returns the language adapter registered for a file path, matching
+// case-insensitively on the extension it declares.
+func (e *Engine) adapterFor(filePath string) (parser.LanguageAdapter, bool) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	for _, adapter := range e.adapters {
+		for _, declared := range adapter.FileExtensions() {
+			if ext == declared {
+				return adapter, true
 			}
 		}
 	}
-
-	scanBlock(tsFunctionHelperRegex)
-	scanBlock(tsVarArrowHelperRegex)
-	scanBlock(tsVarFuncHelperRegex)
-
-	// Expression-bodied arrows: const f = (...) => expect(...)...;
-	arrowMatches := tsVarArrowExprRegex.FindAllStringSubmatchIndex(src, -1)
-	for _, m := range arrowMatches {
-		if m[0] >= len(cleanFullSrc) || cleanFullSrc[m[0]] != src[m[0]] {
-			// Declaration start is inside a comment or string
-			continue
-		}
-		name := src[m[2]:m[3]]
-		idx := m[1]
-		for idx < len(src) && (src[idx] == ' ' || src[idx] == '\t' || src[idx] == '\r' || src[idx] == '\n') {
-			idx++
-		}
-		if idx < len(src) && src[idx] != '{' {
-			var body string
-			if src[idx] == '(' {
-				closeParen := parser.FindMatchingTSParen(src, idx)
-				if closeParen != -1 {
-					body = src[idx : closeParen+1]
-				}
-			}
-			if body == "" {
-				end := idx
-				for end < len(src) && src[end] != ';' && src[end] != '\n' {
-					end++
-				}
-				body = src[idx:end]
-			}
-			cleanBody := blankCommentsAndStrings(body, true)
-			if genericAssertionRegex.MatchString(cleanBody) {
-				helpers[name] = true
-			}
-		}
-	}
-
-	return helpers
-}
-
-func isTSOrJS(filePath string) bool {
-	return strings.HasSuffix(filePath, ".ts") || strings.HasSuffix(filePath, ".tsx") || strings.HasSuffix(filePath, ".js") || strings.HasSuffix(filePath, ".jsx")
-}
-
-// parseGenericTestUnits extracts test units and function bodies for non-Dart languages.
-func parseGenericTestUnits(content []byte, filePath string) []parser.TestUnit {
-	var units []parser.TestUnit
-	src := string(content)
-
-	lineOffsets := []int{0}
-	for i := range len(src) {
-		if src[i] == '\n' {
-			lineOffsets = append(lineOffsets, i+1)
-		}
-	}
-	offsetToLine := func(byteOffset int) int {
-		low, high := 0, len(lineOffsets)-1
-		line := 1
-		for low <= high {
-			mid := (low + high) / 2
-			if lineOffsets[mid] <= byteOffset {
-				line = mid + 1
-				low = mid + 1
-			} else {
-				high = mid - 1
-			}
-		}
-		return line
-	}
-	var targetRegex *regexp.Regexp
-	isTS := isTSOrJS(filePath)
-	var assertingHelpers map[string]bool
-	if isTS {
-		targetRegex = tsTestRegex
-		assertingHelpers = collectTSAssertingHelpers(src)
-	} else {
-		switch {
-		case strings.HasSuffix(filePath, ".kt"):
-			targetRegex = ktTestRegex
-		case strings.HasSuffix(filePath, ".swift"):
-			targetRegex = swiftTestRegex
-		default:
-			targetRegex = tsTestRegex
-		}
-	}
-
-	matches := targetRegex.FindAllStringSubmatchIndex(src, -1)
-	for _, m := range matches {
-		var testName string
-		for group := 2; group < len(m); group += 2 {
-			if m[group] != -1 {
-				testName = src[m[group]:m[group+1]]
-				break
-			}
-		}
-		if testName == "" {
-			testName = src[m[0]:m[1]]
-		}
-		startOffset := m[0]
-		startLine := offsetToLine(startOffset)
-
-		var body string
-		if isTS {
-			// m[0] is the start of it/test call. Find open paren.
-			openParenRel := strings.Index(src[startOffset:], "(")
-			if openParenRel != -1 {
-				openParen := startOffset + openParenRel
-				closeParen := parser.FindMatchingTSParen(src, openParen)
-				if closeParen != -1 {
-					// argsBody is from after the comma (m[1]) up to closeParen
-					body = strings.TrimSpace(src[m[1]:closeParen])
-				}
-			}
-		}
-		if body == "" {
-			openBrace := strings.Index(src[startOffset:], "{")
-			if openBrace != -1 {
-				openIdx := startOffset + openBrace
-				closeIdx := -1
-				if isTS {
-					closeIdx = parser.FindMatchingTSBrace(src, openIdx)
-				} else {
-					closeIdx = parser.FindMatchingBrace(src, openIdx)
-				}
-				if closeIdx != -1 {
-					body = src[startOffset : closeIdx+1]
-				}
-			}
-		}
-		if body == "" {
-			lineEnd := strings.Index(src[startOffset:], "\n")
-			if lineEnd != -1 {
-				body = src[startOffset : startOffset+lineEnd]
-			} else {
-				body = src[startOffset:]
-			}
-		}
-
-		cleanBody := blankCommentsAndStrings(body, isTS)
-		var assertions []string
-		if genericAssertionRegex.MatchString(cleanBody) {
-			assertions = append(assertions, "assert")
-		}
-		if isTS && len(assertingHelpers) > 0 {
-			for helper := range assertingHelpers {
-				callPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(helper) + `\s*\(`)
-				matches := callPattern.FindAllStringIndex(cleanBody, -1)
-				for _, match := range matches {
-					start := match[0]
-					p := start - 1
-					for p >= 0 && (cleanBody[p] == ' ' || cleanBody[p] == '\t' || cleanBody[p] == '\r' || cleanBody[p] == '\n') {
-						p--
-					}
-					if p >= 0 && (cleanBody[p] == '.' || cleanBody[p] == '?') {
-						continue // member call like obj.check() or obj?.check()
-					}
-					// Verify this is an actual call, not an object method declaration like { check() {} }
-					openParen := strings.Index(cleanBody[start:], "(") + start
-					closeParen := parser.FindMatchingTSParen(cleanBody, openParen)
-					if closeParen != -1 {
-						after := closeParen + 1
-						for after < len(cleanBody) && (cleanBody[after] == ' ' || cleanBody[after] == '\t' || cleanBody[after] == '\r' || cleanBody[after] == '\n') {
-							after++
-						}
-						if after < len(cleanBody) && cleanBody[after] == '{' {
-							continue // method definition like { check() {} }
-						}
-					}
-
-					shadowPattern := regexp.MustCompile(`(?:\b(?:const|let|var)\s+` + regexp.QuoteMeta(helper) + `\b|\bfunction\s+` + regexp.QuoteMeta(helper) + `\b)`)
-					if !shadowPattern.MatchString(cleanBody) {
-						assertions = append(assertions, "helper:"+helper)
-						break
-					}
-				}
-			}
-		}
-
-		units = append(units, parser.TestUnit{
-			Name:       testName,
-			FilePath:   filePath,
-			StartLine:  startLine,
-			Kind:       "unit",
-			RawBody:    body,
-			Assertions: assertions,
-		})
-	}
-
-	if len(units) == 0 {
-		var assertions []string
-		if genericAssertionRegex.MatchString(src) {
-			assertions = []string{"assert"}
-		}
-		units = append(units, parser.TestUnit{
-			Name:       filePath,
-			FilePath:   filePath,
-			StartLine:  1,
-			Kind:       "file",
-			RawBody:    src,
-			Assertions: assertions,
-		})
-	}
-
-	return units
+	return nil, false
 }
 
 // Run executes the audit across target paths according to options.
@@ -455,7 +188,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 		opts.ProgressFn("discovering", 0, 0, "")
 	}
 
-	discovery := DiscoverScope(paths, e.dartAdapter, opts.FailTraversal)
+	discovery := DiscoverScope(paths, e.adapters, opts.FailTraversal)
 	report.Scope.Excluded = discovery.Excluded
 	report.Scope.Unsupported = discovery.Unsupported
 	report.Diagnostics = append(report.Diagnostics, discovery.Diagnostics...)
@@ -494,27 +227,20 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			continue
 		}
 
-		var units []parser.TestUnit
-		if strings.HasSuffix(file, ".go") {
-			u, err := e.goAdapter.LocateTests(content, file)
-			if err != nil {
-				failedFilesMap[canonicalAbsPath(file)] = true
-				hasInputFailure = true
-				report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("parse_failed", normalizePath(file), err.Error()))
-				continue
-			}
-			units = u
-		} else if strings.HasSuffix(file, ".dart") {
-			u, err := e.dartAdapter.LocateTests(content, file)
-			if err != nil {
-				failedFilesMap[canonicalAbsPath(file)] = true
-				hasInputFailure = true
-				report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("parse_failed", normalizePath(file), err.Error()))
-				continue
-			}
-			units = u
-		} else {
-			units = parseGenericTestUnits(content, file)
+		adapter, found := e.adapterFor(file)
+		if !found {
+			failedFilesMap[canonicalAbsPath(file)] = true
+			hasInputFailure = true
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("parse_failed", normalizePath(file), fmt.Sprintf("no language adapter handles extension %q", filepath.Ext(file))))
+			continue
+		}
+
+		units, err := adapter.LocateTests(content, file)
+		if err != nil {
+			failedFilesMap[canonicalAbsPath(file)] = true
+			hasInputFailure = true
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("parse_failed", normalizePath(file), err.Error()))
+			continue
 		}
 
 		analyzedFiles = append(analyzedFiles, normalizePath(file))
@@ -525,7 +251,8 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			}
 		}
 
-		suppressions := models.ParseSuppressions(string(content))
+		src := string(content)
+		suppressions := models.ParseSuppressions(src)
 		var fileViolations []models.Violation
 
 		evalUnits := units
@@ -535,60 +262,75 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				FilePath:  file,
 				StartLine: 1,
 				Kind:      "file",
-				RawBody:   string(content),
+				RawBody:   src,
 			}}
 		}
 
-		// Hygiene rules for every language
+		// Hygiene rules apply to every supported language.
 		for _, u := range units {
 			if u.Kind == "unit" || u.Kind == "bloc" {
 				fileViolations = append(fileViolations, e.tautologyRule.Evaluate(u)...)
 			}
 		}
-		fileViolations = append(fileViolations, e.skipRule.CheckFile(file, string(content))...)
+		fileViolations = append(fileViolations, e.skipRule.CheckFile(file, src)...)
+		fileViolations = append(fileViolations, e.focusRule.CheckFile(file, src)...)
 
-		// 1. Universal checks
+		// Universal detectors.
 		fileViolations = append(fileViolations, e.zeroAssert.Check(units)...)
 		fileViolations = append(fileViolations, e.cloneDetect.Check(evalUnits)...)
 		fileViolations = append(fileViolations, e.namingDetect.Check(evalUnits)...)
 
-		// 2. Language & Framework rules
 		isE2E := parser.IsE2EFile(file, content)
 
-		if strings.HasSuffix(file, ".dart") {
+		switch adapter.ID() {
+		case "dart":
 			fileViolations = append(fileViolations, e.blocDuplicateRule.Check(units)...)
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.seedEchoRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.mockEchoRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.vacuousStateRule.Evaluate(u)...)
 			}
 			if isE2E {
-				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, string(content))...)
+				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, src)...)
 			}
-		} else if strings.HasSuffix(file, ".go") {
+		case "golang":
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.domainPurityRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.tableDuplicateRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.swallowedErrorRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.uncheckedWantRule.Evaluate(u)...)
 			}
-		} else if isTSOrJS(file) {
+		case "typescript":
+			fileViolations = append(fileViolations, e.nestUnmockedDbRule.EvaluateFile(file, src, units)...)
+			fileViolations = append(fileViolations, e.mockedSutRule.EvaluateFile(file, src, units)...)
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.nestControllerEchoRule.Evaluate(u)...)
-				fileViolations = append(fileViolations, e.nestUnmockedDbRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.floatingAssertRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.catchOnlyRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.conditionalAssertRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.existenceOnlyRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.selfMockRule.Evaluate(u)...)
+				if !isE2E {
+					fileViolations = append(fileViolations, e.snapshotOnlyRule.Evaluate(u)...)
+				}
 			}
 			if isE2E {
-				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, string(content))...)
+				fileViolations = append(fileViolations, e.hardWaitRule.EvaluateFile(units, file, src)...)
 			} else {
-				fileViolations = append(fileViolations, e.reactSleepRule.EvaluateFile(units, string(content))...)
+				fileViolations = append(fileViolations, e.reactSleepRule.EvaluateFile(units, src)...)
 			}
-		} else if strings.HasSuffix(file, ".kt") {
+		case "kotlin":
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.kotlinCoroutineRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.kotlinMockEchoRule.Evaluate(u)...)
 			}
-		} else if strings.HasSuffix(file, ".swift") {
+		case "swift":
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.swiftTimeoutRule.Evaluate(u)...)
 			}
 		}
-		// 3. Filter suppressed violations
+
+		// Filter suppressed violations.
 		for _, v := range fileViolations {
 			if !models.IsSuppressed(suppressions, v.RuleID, v.LineNumber) {
 				v.FilePath = normalizePath(v.FilePath)

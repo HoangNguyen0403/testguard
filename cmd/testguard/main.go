@@ -165,23 +165,20 @@ func main() {
 		Short: "Standalone polyglot test quality & architectural boundary guard CLI",
 		Long: `TestGuard is a standalone, zero-config polyglot CLI that inspects test code,
 detects duplicate tests, catches vanity test anti-patterns, and enforces architectural
-boundaries across Dart/Flutter, Go, and TypeScript.
+boundaries across Dart/Flutter, Go, TypeScript/JavaScript, Kotlin, and Swift.
 
 Website: https://github.com/HoangNguyen0403/testguard#readme
 Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
-		Example: `  # 1. Day-to-day: Scan only files modified in your active branch/PR
-  testguard --diff
-
-  # 2. Full audit: Scan all test files across the entire monorepo
+		Example: `  # 1. Full audit: scan all test files across the entire monorepo
   testguard --all
 
-  # 3. Target a specific project folder or single test file
+  # 2. Target a specific project folder or single test file
   testguard path/to/project/test/
 
-  # 4. Output machine-readable JSON for CI automation
+  # 3. Output machine-readable JSON for CI automation
   testguard --json
 
-  # 5. Inspect why a rule exists and how to remediate it
+  # 4. Inspect why a rule exists and how to remediate it
   testguard explain GUARD-DART-SEED-ECHO`,
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
@@ -305,7 +302,7 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 			}
 
 			fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-			fmt.Printf("📖 Rule: %s — %s [%s | %s]\n", doc.ID, doc.Title, doc.Severity, doc.Language)
+			fmt.Printf("📖 Rule: %s — %s [%s | %s]\n", doc.ID, doc.Title, doc.Severity, doc.LanguageLabel())
 			fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 			fmt.Printf("📝 Description:\n  %s\n\n", doc.Description)
 			fmt.Printf("💡 Why It Matters:\n  %s\n\n", doc.WhyItMatters)
@@ -324,7 +321,7 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Println("Available TestGuard Rules:")
 			for _, r := range docs.AllRules() {
-				fmt.Printf("  • %-30s [%-8s | %-10s] %s\n", r.ID, r.Severity, r.Language, r.Title)
+				fmt.Printf("  • %-30s [%-8s | %-18s] %s\n", r.ID, r.Severity, r.LanguageLabel(), r.Title)
 			}
 		},
 	}

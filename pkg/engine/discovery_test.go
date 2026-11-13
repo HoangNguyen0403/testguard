@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/HoangNguyen0403/testguard/pkg/engine"
+	"github.com/HoangNguyen0403/testguard/pkg/parser"
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
+	"github.com/HoangNguyen0403/testguard/pkg/parser/typescript"
 )
 
 func TestDiscoverScopeSymlinkRejected(t *testing.T) {
@@ -22,7 +24,7 @@ func TestDiscoverScopeSymlinkRejected(t *testing.T) {
 	}
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{symlinkPath}, adapter, nil)
+	res := engine.DiscoverScope([]string{symlinkPath}, []parser.LanguageAdapter{adapter}, nil)
 
 	if !res.InputFailure {
 		t.Errorf("expected InputFailure to be true for explicit symlink target")
@@ -46,14 +48,14 @@ func TestDiscoverScopeSymlinkRejected(t *testing.T) {
 	_ = os.Symlink(subDir, dirSymlink)
 
 	// Without trailing slash
-	resDir := engine.DiscoverScope([]string{dirSymlink}, adapter, nil)
+	resDir := engine.DiscoverScope([]string{dirSymlink}, []parser.LanguageAdapter{adapter}, nil)
 	if !resDir.InputFailure {
 		t.Errorf("expected InputFailure for directory symlink target")
 	}
 
 	// With trailing slash
 	dirSymlinkTrailing := dirSymlink + string(filepath.Separator)
-	resDirTrailing := engine.DiscoverScope([]string{dirSymlinkTrailing}, adapter, nil)
+	resDirTrailing := engine.DiscoverScope([]string{dirSymlinkTrailing}, []parser.LanguageAdapter{adapter}, nil)
 	if !resDirTrailing.InputFailure {
 		t.Errorf("expected InputFailure for directory symlink with trailing slash")
 	}
@@ -74,7 +76,7 @@ func TestDiscoverScopeDefaultDirectoryExclusions(t *testing.T) {
 	}
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{tmpDir}, adapter, nil)
+	res := engine.DiscoverScope([]string{tmpDir}, []parser.LanguageAdapter{adapter}, nil)
 
 	if len(res.CandidateFiles) != 1 {
 		t.Errorf("expected exactly 1 candidate file, got %d (%+v)", len(res.CandidateFiles), res.CandidateFiles)
@@ -98,7 +100,7 @@ func TestDiscoverScopeExplicitNonTestFile(t *testing.T) {
 	_ = os.WriteFile(sourceFile, []byte("package main\nfunc main(){}\n"), 0644)
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{sourceFile}, adapter, nil)
+	res := engine.DiscoverScope([]string{sourceFile}, []parser.LanguageAdapter{adapter}, nil)
 
 	if len(res.CandidateFiles) != 0 {
 		t.Errorf("non-test file must not be in candidate files")
@@ -120,7 +122,7 @@ func TestDiscoverScopeExplicitUnsupportedFile(t *testing.T) {
 	_ = os.WriteFile(docFile, []byte("%PDF-1.4"), 0644)
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{docFile}, adapter, nil)
+	res := engine.DiscoverScope([]string{docFile}, []parser.LanguageAdapter{adapter}, nil)
 
 	if len(res.Unsupported) != 1 {
 		t.Errorf("expected 1 unsupported file, got %+v", res.Unsupported)
@@ -142,7 +144,7 @@ func TestDiscoverScopeGeneratedDartFile(t *testing.T) {
 	_ = os.WriteFile(genFile, []byte("// GENERATED CODE - DO NOT MODIFY BY HAND\nvoid main(){}\n"), 0644)
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{tmpDir}, adapter, nil)
+	res := engine.DiscoverScope([]string{tmpDir}, []parser.LanguageAdapter{adapter}, nil)
 
 	if len(res.CandidateFiles) != 0 {
 		t.Errorf("generated file must not be in candidate files")
@@ -169,7 +171,7 @@ func TestDiscoverScopeOverlappingRootsDeduplication(t *testing.T) {
 	adapter := dart.NewAdapter()
 
 	// 1. Directory + Explicit file overlap
-	resOverlap := engine.DiscoverScope([]string{tmpDir, testFile}, adapter, nil)
+	resOverlap := engine.DiscoverScope([]string{tmpDir, testFile}, []parser.LanguageAdapter{adapter}, nil)
 	if resOverlap.DiscoveredFiles != 1 {
 		t.Errorf("expected exactly 1 discovered file across overlapping root and file, got %d", resOverlap.DiscoveredFiles)
 	}
@@ -197,7 +199,7 @@ func TestDiscoverScopeOverlappingRootsDeduplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to express fixture relative to cwd: %v", err)
 	}
-	resMixed := engine.DiscoverScope([]string{localTestFile, relTestFile}, adapter, nil)
+	resMixed := engine.DiscoverScope([]string{localTestFile, relTestFile}, []parser.LanguageAdapter{adapter}, nil)
 	if resMixed.InputFailure {
 		t.Errorf("mixed spellings must resolve to one existing file, got diagnostics %+v", resMixed.Diagnostics)
 	}
@@ -215,7 +217,7 @@ func TestDiscoverScopeDuplicateRootsGeneratedCountedOnce(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(tmpDir, "real_test.go"), []byte("package test\nfunc TestReal(t *testing.T){}\n"), 0644)
 
 	adapter := dart.NewAdapter()
-	res := engine.DiscoverScope([]string{tmpDir, tmpDir}, adapter, nil)
+	res := engine.DiscoverScope([]string{tmpDir, tmpDir}, []parser.LanguageAdapter{adapter}, nil)
 
 	if res.DiscoveredFiles != 2 {
 		t.Errorf("expected 2 unique discovered candidates across duplicate roots, got %d", res.DiscoveredFiles)
@@ -259,7 +261,7 @@ func TestDiscoverScope_LinkedWorktreeAndDefaultDirectories(t *testing.T) {
 	adapter := dart.NewAdapter()
 
 	// 1. Scanning root: only a_test.go is a candidate
-	res := engine.DiscoverScope([]string{tmpDir}, adapter, nil)
+	res := engine.DiscoverScope([]string{tmpDir}, []parser.LanguageAdapter{adapter}, nil)
 	if len(res.CandidateFiles) != 1 || filepath.Base(res.CandidateFiles[0]) != "a_test.go" {
 		t.Fatalf("expected candidate files to contain only a_test.go, got %+v", res.CandidateFiles)
 	}
@@ -287,8 +289,54 @@ func TestDiscoverScope_LinkedWorktreeAndDefaultDirectories(t *testing.T) {
 	}
 
 	// 2. Scanning root/wt directly as the root still analyzes b_test.go
-	resWT := engine.DiscoverScope([]string{wtDir}, adapter, nil)
+	resWT := engine.DiscoverScope([]string{wtDir}, []parser.LanguageAdapter{adapter}, nil)
 	if len(resWT.CandidateFiles) != 1 || filepath.Base(resWT.CandidateFiles[0]) != "b_test.go" {
 		t.Fatalf("expected candidate files for direct wt scan to be b_test.go, got %+v", resWT.CandidateFiles)
+	}
+}
+
+func TestDiscoverScopeRecognizesCypressPlaywrightAndScriptVariants(t *testing.T) {
+	tmpDir := t.TempDir()
+	names := []string{
+		"login.cy.ts",
+		"login.cy.js",
+		"checkout.e2e.ts",
+		"checkout.e2e.tsx",
+		"checkout.e2e.js",
+		"checkout.e2e-spec.ts",
+		"worker.test.mjs",
+		"worker.spec.cjs",
+		"worker.test.mts",
+		"worker.spec.cts",
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("it('x', () => { expect(1).toBe(1); });\n"), 0644); err != nil {
+			t.Fatalf("unable to write fixture %s: %v", name, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "notes.md"), []byte("# notes\n"), 0644); err != nil {
+		t.Fatalf("unable to write non-test fixture: %v", err)
+	}
+
+	adapters := []parser.LanguageAdapter{dart.NewAdapter(), typescript.NewAdapter()}
+	res := engine.DiscoverScope([]string{tmpDir}, adapters, nil)
+
+	if len(res.Unsupported) != 0 {
+		t.Fatalf("expected no unsupported inputs, got %+v", res.Unsupported)
+	}
+	found := make(map[string]bool, len(res.CandidateFiles))
+	for _, file := range res.CandidateFiles {
+		found[filepath.Base(file)] = true
+	}
+	for _, name := range names {
+		if !found[name] {
+			t.Errorf("expected %s to be discovered as a test file; candidates: %+v", name, res.CandidateFiles)
+		}
+	}
+	if found["notes.md"] {
+		t.Errorf("expected notes.md to stay out of the candidate set")
+	}
+	if res.DiscoveredFiles != len(names) {
+		t.Errorf("expected %d discovered test files, got %d", len(names), res.DiscoveredFiles)
 	}
 }

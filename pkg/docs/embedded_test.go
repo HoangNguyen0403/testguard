@@ -29,3 +29,15 @@ func TestListAllRules(t *testing.T) {
 		t.Fatalf("expected non-empty rule catalog")
 	}
 }
+
+// TestAllRulesSortedByID pins the `testguard rules` output order. The catalog is
+// a map, so an unsorted projection would change order between runs and break
+// diff-based review of the rendered table.
+func TestAllRulesSortedByID(t *testing.T) {
+	catalog := docs.AllRules()
+	for i := 1; i < len(catalog); i++ {
+		if catalog[i-1].ID >= catalog[i].ID {
+			t.Fatalf("catalog order is not stable: %s appears before %s", catalog[i-1].ID, catalog[i].ID)
+		}
+	}
+}
