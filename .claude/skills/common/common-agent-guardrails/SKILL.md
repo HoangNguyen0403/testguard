@@ -29,6 +29,7 @@ A rule that must always hold belongs in a hook, not in a prompt. Prompts persuad
 - **Absolute compliance only**: encode a rule here when a single violation is unacceptable, not when it is merely preferred.
 - **Deterministic check**: the decision must be computable from tool name, arguments, and repo state — never from model judgment.
 - **Paired with a skill**: the skill teaches the rule, the guardrail enforces it. Ship both or the rule decays.
+- For unfamiliar workspaces, use the [admission checklist](references/untrusted-workspace-admission.md); it is review guidance, not a sandbox or proof of enforcement.
 
 ## 2. Required Guardrail Classes
 
@@ -79,15 +80,5 @@ A rule that must always hold belongs in a hook, not in a prompt. Prompts persuad
 ## References
 
 - [Guardrail Policy Template](references/guardrails-template.yaml)
-- [Runtime Adapters](references/runtime-adapters.md)
-
-## Canonical response anchors
-
-When this skill applies, preserve the following domain terminology or equivalent concrete examples in the answer when relevant:
-
-- exit 2 blocks
-- protected paths
-- test lock
-- approval gate
-- fail closed
-- log the block decision
+- [Runtime Adapters & Five-Checkpoint Map](references/runtime-adapters.md)
+- [Untrusted Workspace Admission & Rubric](references/untrusted-workspace-admission.md) — review checklist, not a control

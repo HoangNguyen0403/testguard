@@ -10,21 +10,21 @@
 | common-api-design | `**/*.controller.ts`, `**/*.router.ts`, `**/*.routes.ts`, `**/routes/**`, `**/controllers/**`, `**/handlers/**` | rest api, endpoint, http method, status code, versioning, pagination, openapi, api design, api contract |
 | common-architecture-audit | `package.json`, `pubspec.yaml`, `go.mod`, `pom.xml`, `nest-cli.json` | architecture audit, code review, tech debt, logic leakage, refactor |
 | common-architecture-diagramming | `ARCHITECTURE.md`, `**/*.drawio`, `**/*.mermaid`, `docs/architecture/**` | diagram, c4, drawio, mermaid, erd, entity relationship, schema diagram, aws, architecture diagram, solution architecture, system context, deployment diagram |
-| **common-business-requirements** | `BRD.md`, `docs/brd/brd-*.md`, `specs/*.md` | create brd, business requirements, business case, stakeholder impact, as-is to to-be, roi justification |
-| common-context-optimization | `*.log`, `chat-history.json` | reduce tokens, optimize context, summarize history, clear output |
+| common-context-optimization | `*.log`, `chat-history.json` | reduce tokens, optimize context, summarize history, clear output, context management, prompt-cache, prompt caching, orchestration cost |
 | common-error-handling | `**/*.service.ts`, `**/*.handler.ts`, `**/*.controller.ts` | error handling, exception, try catch, error boundary, error response, error code, throw |
 | **common-feedback-reporter** | `SKILL.md`, `+common/common-learning-log` | skill violation, pre-write audit, audit violations |
 | common-learning-log | `AGENTS_LEARNING.md` | mistake, wrong, redo, correction, agent error, learning log |
 | common-mobile-animation | `**/*_page.dart`, `**/*_screen.dart`, `**/*Activity.kt`, `**/*Screen.tsx` | Animation, AnimationController, Animated, MotionLayout, transition, gesture |
 | **common-mobile-ux-core** | `**/*_page.dart`, `**/*_screen.dart`, `**/*_view.dart`, `**/*Activity.kt`, `**/*Screen.tsx` | mobile, responsive, SafeArea, touch, gesture, viewport |
 | common-observability | `**/*.service.ts`, `**/*.handler.ts`, `**/*.middleware.ts`, `**/*.interceptor.ts` | logging, tracing, metrics, opentelemetry, observability, slo |
-| **common-product-requirements** | `PRD.md`, `docs/prd/prd-*.md`, `specs/*.md` | create prd, product requirements, draft requirements, new feature spec, acceptance criteria |
 | common-review-policy | `docs/review-policy.md`, `REVIEW.md`, `CODEOWNERS` | review policy, severity ladder, review noise, nit cap, review tuning, who approves |
 | common-sdlc-metrics | `docs/ops/bands.yaml`, `artifacts/sdlc-metrics.md` | dora metrics, lead time, change failure rate, plan adherence, control band, delivery metrics |
 | **common-security-audit** | `package.json`, `go.mod`, `pubspec.yaml`, `pom.xml`, `Cargo.toml`, `requirements.txt`, `AndroidManifest.xml` | Dockerfile, security audit, vulnerability scan, secrets detection, injection probe, pentest |
 | common-session-retrospective | `**/*.spec.ts`, `**/*.test.ts`, `SKILL.md`, `AGENTS.md`, `+common/common-learning-log` | retrospective, self-learning, improve skills, session review, correction, rework |
 | **common-skill-creator** | `SKILL.md`, `evals/evals.json` | create skill, audit skill, trigger rate, optimize description |
 | **common-software-requirements** | `SRS.md`, `docs/srs/srs-*.md`, `specs/*.md` | create srs, software requirements, functional specification, system behavior spec, technical requirements, non-functional requirements |
+| common-stitch-design | `DESIGN.md`, `.stitch/**` | stitch, google stitch, stitch mcp, design.md, stitch screen, stitch variants |
+| common-subagent-driven-development | `docs/**/plans/*.md`, `.agent/sdd/**`, `*plan*.md`, `TODO.md` | subagent-driven-development, subagent, implement plan, execute plan, implement this plan, implement PR, implement tasks, execute tasks, start implementation, plan implementation, subagent driven, multi-task implementation, sdd |
 | **common-tdd** | `**/*.test.ts`, `**/*.spec.ts`, `**/*_test.go`, `**/*Test.java`, `**/*_test.dart`, `**/*_spec.rb` | tdd, unit test, write test, red green refactor, failing test, test coverage |
 | **common-workflow-writing** | `.agents/workflows/*.md`, `SKILL.md` | create workflow, write workflow, new skill, new workflow |
 
@@ -33,25 +33,30 @@
 | Skill | Match when user mentions |
 | ----- | ----------------------- |
 | **common-best-practices** | solid, kiss, dry, yagni, naming, conventions, refactor, clean code |
+| common-book-to-skill | book to skill, book-to-skill, convert a book to a skill |
 | common-code-review | review, pr, critique, analyze code |
 | common-dast-tooling | DAST, dynamic scan, zap, nuclei, nikto, curl probe, pentest, dynamic analysis, sqlmap, ffuf, mobile proxy |
 | common-debugging | debug, fix bug, crash, error, exception, troubleshooting |
 | **common-decision-discipline** | decision brief, delivery contract, compare approaches, evidence ledger, approval state, option trade-offs, shape a direction |
+| common-devops-operations | devops operations, cloud deployment, hosting verification, deployment diagnosis, cloud monitoring, deployment recovery |
 | common-documentation | comment, docstring, readme, documentation |
 | **common-exploit-verification** | exploit verification, proof of concept, PoC, false positive, validate finding, exploit proof, pentest finding, security evidence |
+| common-family-ux | family app, parents and children, kids app, child ux, parent gate, preschool, parenting app, designed for families, coppa |
 | **common-git-collaboration** | commit, branch, merge, pull-request, git |
 | **common-llm-security** | LLM security, prompt injection, agent security, RAG security, AI security, openai, anthropic, langchain, LLM review |
+| **common-mcp-security-assessment** | mcp security, mcp assessment, owasp mcp, mcp top 10, mcp security report, tool poisoning, shadow mcp, mcp audit, mcp posture, mcp config review |
 | common-mobile-visual-testing | visual test, mobile test, verify ui, dark mode test, accessibility audit, behavioral test, visual regression, localization test |
 | **common-operator-profile** | operator profile, audience adaptation, non-technical stakeholder, business owner, plain language summary |
 | **common-owasp** | security review, OWASP, broken access control, IDOR, BOLA, injection, broken auth, API review, authorization, access control, mobile security |
 | **common-pentest-methodology** | pentest, penetration test, red team, attack surface, threat model, PTES, security assessment, exploit, hacker score |
-| **common-performance-engineering** | performance, optimize, profile, scalability, latency, throughput, memory leak, bottleneck |
+| **common-performance-engineering** | performance, optimize, profiling, scalability, latency, throughput, memory leak, bottleneck |
+| **common-project-verification** | project verification, verification kit, journey map, verification doctor, drive journey, verify journey, evidence retention, map maintenance, proof freshness, verification discrepancy |
 | **common-protocol-enforcement** | verify done, protocol check, self-scan, pre-write audit, task complete, audit violations, retrospective, scan, red-team |
 | **common-security-standards** | security, encrypt, authenticate, authorize |
 | common-store-changelog | generate changelog, app store notes, play store release, what's new, release notes, version notes, store release |
-| common-task-complexity-routing | task complexity, snc score, complexity tier, difficulty tier, autonomy level, review depth, model tier, how big is this change |
+| common-task-complexity-routing | task complexity, snc score, complexity tier, difficulty tier, autonomy level, review depth, model tier, model routing, llm model selection, model selection, model capability, thinking level, reasoning effort, effort selection, premium model, how big is this change |
 | common-telemetry | token cost, token usage, session telemetry, cost report |
 | **common-ui-design** | build a page, create a component, design a dashboard, landing page, UI for, build a layout, make it look good, improve the design, build UI, create interface, design screen |
-| common-web-visual-testing | web test, browser test, responsive audit, verify web ui, cross-browser check, web accessibility |
+| common-web-visual-testing | web test, browser test, responsive audit, verify web ui, cross-browser check, web accessibility, visual testing, zoom reflow |
 
 > Load matched skills: `<SKILLS>/common/<skill>/SKILL.md`. Load ALL that match — the tier model already filters irrelevant ones.

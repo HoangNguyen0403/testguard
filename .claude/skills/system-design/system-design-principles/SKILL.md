@@ -56,16 +56,16 @@ See [implementation examples](references/implementation.md) for dependency flow 
 
 ## Distributed Systems
 
-- **CAP**: Trade-off Consistency/Availability/Partition tolerance. See [CAP & Consistency Patterns](references/distributed-systems.md).
-- **Idempotency**: Operations repeatable without side effects. See [Idempotency Patterns](references/distributed-systems.md#idempotency).
+- **CAP**: Apply only to behavior during a network partition in a distributed data system. See [CAP & Consistency Patterns](references/distributed-systems.md); consistency, availability, and partition tolerance are not product labels or uptime percentages.
+- **Idempotency**: Preserve one intended effect for retries of the same business operation. Use the [idempotency contract](references/idempotency-contract.md), not “without side effects” or a fresh key per transport attempt.
 - **Circuit Breaker**: Fail fast on failing services. See [Resilience Patterns](references/resilience-patterns.md).
-- **Eventual Consistency**: Design for async data sync. See [CAP & Consistency Patterns](references/distributed-systems.md#eventual-consistency).
+- **Eventual Consistency**: State a freshness/convergence objective, how it is measured, and behavior when it is missed; do not promise a generic convergence time.
 
 ## Documentation & Evolution
 
 - **Design Docs**: Write specs before major implementations.
 - **Versioning**: Version APIs/schemas for backward compatibility.
-- **Extensibility**: Use Strategy/Factory for future changes.
+- **Extensibility**: Introduce Strategy/Factory or similar abstraction only when concrete variation, multi-tenant divergence, or an explicit plugin boundary exists. Hypothetical future extension alone does not justify abstraction layers.
 
 ## References
 
@@ -75,5 +75,5 @@ See [implementation examples](references/implementation.md) for dependency flow 
 ## Anti-Patterns
 
 - **No god classes**: Single Responsibility — one reason to change per module.
-- **No synchronous coupling**: Prefer events or queues for cross-service calls.
-- **No premature abstraction**: Design for current load; scale when proven needed.
+- **No blanket synchronous-coupling ban**: choose synchronous, asynchronous, or hybrid communication from the boundary's consistency, latency, failure, and coupling requirements. A bounded synchronous transaction can protect an immediate invariant; independent notifications may remain asynchronous. State the trade-offs and failure behavior.
+- **No premature abstraction**: Design for current requirements and proven load; introduce abstraction patterns (e.g. Strategy/Factory) when concrete variation, multi-vendor/tenant divergence, or an explicit plugin/change boundary exists, rather than for speculative future extension. Conversely, do not ban valid abstractions when concrete variation justifies them.

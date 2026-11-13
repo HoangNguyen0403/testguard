@@ -1,6 +1,6 @@
 ---
 name: common-task-complexity-routing
-description: Scores a coding task on Spread, Novelty, and Centrality (SNC 0-6) and maps the tier to autonomy, verification depth, review mode, reviewers, model tier. Use when sizing a fix or feature before planning, choosing fast vs deep review, or deciding whether HARD STOP approval is required.
+description: Scores a task on Spread, Novelty, Centrality (0-6), routes the tier to autonomy, verification, review and model tier, and gives provider-neutral capability/effort guidance that preserves configured profiles. Use for sizing, model routing, LLM model selection, thinking level or model tier.
 guardrail: true
 metadata:
   triggers:
@@ -12,6 +12,14 @@ metadata:
       - autonomy level
       - review depth
       - model tier
+      - model routing
+      - llm model selection
+      - model selection
+      - model capability
+      - thinking level
+      - reasoning effort
+      - effort selection
+      - premium model
       - how big is this change
 ---
 # Task Complexity Routing (SNC)
@@ -44,24 +52,46 @@ Sum the three, never average. Output line: `SNC: S=[0-2] N=[0-2] C=[0-2] total=[
 | `tier=medium` | guided | TDD + self-review | `deep` code-review | plan reviewed, no HARD STOP | `standard` |
 | `tier=high` | plan-first | TDD + independent reviewers (`specialist-architecture-guard`, `specialist-security-reviewer` when relevant) | `deep` code-review | **HARD STOP** before code, human approval before merge | `strong` |
 
+`fast | standard | strong` is a capability hint only. Each host maps it to its model ladder and binds the named review roles to its own invocation mechanism; the hint is not authorization: premium spend, account selection and execution mode remain host/human decisions.
+
+## Capability and Effort
+
+Capability and thinking effort are independent dimensions. Recommend the least expensive **eligible** configuration adequate for the task and its verification burden; never simply the cheapest model. The host resolves eligibility, approved profiles, supported effort and authorized fallback.
+
+- **Per-slice routing**: Assess delegated slices independently on their own SNC, risk floor, and verification adequacy. Deterministic lookup and bounded edits use tier-appropriate tools/models; do not inherit an expensive parent model tier. Reuse existing discovery evidence where sufficient.
+- **Profiles vs roles**: Host profiles (provider, model, mode, features) are explicit execution settings. Prompt role labels or capability hints are not configuration; never launch unchecked workers.
+- **Recovery & quota**: Tool argument rejections or unsupported parameters are schema errors, not provider exhaustion; never fall back unchecked. Factual quota exhaustion (429) advances only to authorized eligible fallbacks with recorded evidence.
+
+Explicit configured model and effort settings are preserved, not silently replaced. Unsupported or unknown effort is recorded `unsupported`/`unknown`, never mapped across vendors. Resolved settings, receipt fields, cost semantics and recovery routes: [Capability and effort resolution](references/routing-table.md#capability-and-effort-resolution).
+
+## Sensitive-Change Risk Floor
+
+Auth, payments, data integrity, secrets, or trust boundaries enforce a minimum of `tier=medium` (guided, deep review, human plan acknowledgment) even if arithmetic total is ≤2. Non-zero spread/novelty (S≥1 or N≥1 with C=2) enforces `tier=high` (plan-first HARD STOP, independent security review, human merge approval). Irreversible actions (data destruction, schema drops, cutover) strictly require explicit human authorization.
+
 ## Rules
 
 - Score before planning; emit `snc_tier` and `model_tier` in every Handoff Payload.
+- Assess delegated slices independently; reuse verified context and avoid inheriting parent model tier for bounded slices.
+- Record requested capability, observable actual configuration, selection reason, effort support and limitations in the existing receipt; unknown stays unknown.
 - Label the score as inference when derived from ticket text alone; re-score after `specialist-codebase-scout` reports impact radius.
-- Round up on doubt. Any auth, money, trust-boundary, or hot-path touch is C=2.
-- Re-score when scope grows mid-task; the tier may only rise, never fall, once work has started.
+- Round up on doubt. Any auth, money, trust-boundary, or hot-path touch is C=2 and subject to the sensitive-change risk floor.
+- Downward complexity reassessment is permitted ONLY with documented new evidence (e.g., scouted blast radius proves isolated scope with verified non-interference), NEVER to bypass unresolved risk, required approvals, or the sensitive-change risk floor.
+- Re-score when scope grows mid-task; the tier must rise immediately when expansion is detected.
 - Never downgrade a tier to skip a gate. Ticket type (bug vs feature) never sets the tier.
+- Do not treat tool parameter rejections as quota exhaustion; report resolution gaps or use authorized routes.
 
 ## Red Flags
 
-Stop and re-score when hearing or thinking: "it's just a bug fix", "one-line change", "skip the plan, it's small", "we'll review it later", "mark it low so we can merge tonight". Each is a rationalization, not a score.
+Stop and re-score when hearing or thinking: "it's just a bug fix", "one-line change", "skip the plan, it's small", "we'll review it later", "mark it low so we can merge tonight", "the tool rejected the model arg so fall back unchecked". Each is a rationalization, not a score.
 
 ## Anti-Patterns
 
-- **No tier by ticket type**: "bug" and "feature" say nothing about S, N, or C.
-- **No averaging**: three 1s and one 2/0/1 both route differently only when summed.
-- **No silent tier**: a plan or handoff without `snc_tier` is incomplete.
-- **No high tier without named reviewers**: `tier=high` must list which specialists review before merge.
+- **No tier by ticket type or averaging**: sum S, N, C; ticket type never sets the tier.
+- **No silent tier or missing reviewers**: plans carry `snc_tier`; `tier=high` lists specialist reviewers.
+- **No premium by tier**: a `strong` hint never authorizes premium spend or host account changes.
+- **No cheapest-model reflex or silent effort mapping**: adequacy includes verification burden.
+- **No parent-tier inheritance**: bounded/deterministic slices do not inherit expensive parent tiers.
+- **No invalid-argument exhaustion**: tool rejections are not quota errors; never fall back unchecked.
 
 ## References
 

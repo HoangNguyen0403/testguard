@@ -16,95 +16,79 @@ Optional args: slug=<feature>, ticket=<id/url>, mode=interactive|autonomous|chan
 
 Execute the following steps using the input above.
 
-
 # SDLC Router Workflow
-
 Goal: Select the next native workflow without loading every workflow body, while preserving a traceable BA -> PM -> IT Department handoff for offshore delivery.
-
 ## Steps
-
 1. Inspect state:
-   - User request; infer `operator_profile` (business | hybrid | technical) per `common-operator-profile` and carry it in every Handoff Payload.
-   - Search `docs/brd/`, `docs/prd/`, and `docs/srs/` for a matching `[slug]`; if absent, use the newest BRD or `git status`. Slug = lowercase kebab-case, minted once at `brainstorm-feature`, reused verbatim downstream; never re-derived.
+   - User request & sizing: infer `operator_profile` (business | hybrid | technical) per `common-operator-profile` (carried in every Handoff Payload) and SNC tier per `common-task-complexity-routing` or the scout `SNC:` line (label as inference until scouted).
+   - Search for the requested task's linked brief/ticket using its stable slug; do not select an unrelated newest document or infer task authority/approval from `git status`. If no matching approved task record exists, identify the missing authority/input and route to the appropriate intake. Record the authoritative work-item reference and its approved revision once; carry `delivery_mode` (`brief | standard | extended`), owner, approval reference, and evidence-lane refs instead of letting later stages re-infer authority. Slug = lowercase kebab-case, minted once at `brainstorm-feature`, reused verbatim downstream; never re-derived.
    - If multiple candidates exist, list them and ask whether to focus, consolidate, or sequence.
-   - Baseline reference: `common-software-requirements/references/requirements-standards-baseline.md` (ships with the skill)
-   - Existing ticket, BRD-lite brief, PRD, SRS/FRS design, implementation plan, task list, walkthrough, UAT signoff, deployment report, release notes, and retro
-   - Jira, ADO, Zephyr, or other MCP context when already configured
-   - Changed files and current test status
+   - Artifacts & repo/system state (baseline: `common-software-requirements/references/requirements-standards-baseline.md`, ships with the skill): existing ticket, BRD-lite brief, PRD, SRS/FRS design, implementation plan, task list, walkthrough, UAT signoff, deployment report, release notes, retro; configured system context (Jira, ADO, Zephyr, or other MCP), changed files, and current test status.
    - Offshore delivery context: business owner, product owner, implementation owners, QA owner, timezone/cadence constraints, environments, release window, and dependency teams
    - Requirement trace health: `BRD-OBJ-* -> REQ-* -> AC-* -> SRS-* -> test evidence`
-   - SNC tier per `common-task-complexity-routing` or the scout `SNC:` line; label as inference until scouted.
-
-2. Choose next workflow (apply tie-break order when multiple bullets match: (1) workflow explicitly named by the operator or by the latest `recommended_next_workflow`, (2) production-incident/urgent-regression signals, (3) earliest missing artifact along the chain below — never skip forward past a gap, (4) cross-cutting audits only on request or as a pre-release gate):
-   - Unclear idea, missing business case, owner, or measurable value (Why lane), or unclear technical direction with no BRD/PRD for the slug (Direction lane) -> `brainstorm-feature`
-   - BRD-lite exists or business direction is clear but product scope, priorities, acceptance criteria, rollout, or delivery plan are unclear (PRD / What, PM-owned planning) -> `plan-feature`
-   - Scale, topology, capacity, or store choice unsettled, or an existing system needs an architecture audit -> `system-design-session`
-   - PRD exists but technical behavior/contracts unclear (SRS/FRS / How) -> `design-solution`
-   - Architecture, auth, trust boundaries, compliance controls, or agent/runtime safety need deeper technical validation -> `design-solution`
-   - BRD-lite, PRD, or SRS/FRS exists but readiness unclear -> `implementation-readiness`
-   - Approved plan with BRD/PRD/SRS trace and testable ACs needs code -> `implement-feature`
-   - Production incident or urgent regression -> `incident-hotfix`
+2. Choose next workflow (apply tie-break order):
+   1) Explicit operator request or latest approved/recommended stage, unless a safety prerequisite blocks affected scope.
+   2) Fresh task-linked active harm gives `incident-hotfix` policy ownership before any ordinary mode execution, even for an explicit diagnose or recover request and even if product learning is stale; do not load an unrelated incident as task context.
+   3) Earliest missing required decision or task-linked authority/input—not a missing filename—except sufficiently specified low-risk maintenance with approved evidence; reused approved context skips rediscovery.
+   4) Cross-cutting audits only on request or as a pre-release gate.
+   - Unclear idea, missing business case, owner, or measurable value (Why lane), or unclear technical direction without BRD/PRD (Direction lane; exempts routine low-risk maintenance) -> `brainstorm-feature`
+   - Task-linked unmet customer-evidence/problem/market gap that the decision depends on -> `discover-product` (when selected/installed; else `brainstorm-feature` with capability gap)
+   - Material unresolved critical value hypothesis or assumption needing empirical test -> `validate-product` (when selected/installed; else `plan-feature` with capability gap)
+   - BRD-lite exists or business direction clear but product scope, priorities, ACs, rollout, delivery plan unclear -> `plan-feature` (explicitly loads `product-management/product-requirements` and on-demand `references/requirements-modeling.md`)
+   - Scale, topology, capacity, or store choice unsettled, or existing system needs architecture audit -> `system-design-session`
+   - PRD exists but technical behavior/contracts unclear (SRS/FRS / How), auth/trust-boundary/sensitive validation needed, or architecture/compliance/agent-runtime safety needs deeper validation -> `design-solution`
+   - BRD-lite, PRD, or SRS/FRS exists but readiness/change impact unclear -> `implementation-readiness`
+   - Approved plan with trace and testable ACs, or approved low-risk maintenance contract, needs code -> `implement-feature`
+   - Cloud or hosting setup, deployment, live verification, monitoring inspection, diagnosis, or authorized recovery -> `deploy-release` with an explicit `operation=setup | deploy | verify | monitor | diagnose | recover` (omitted means `deploy`; effect, not label, decides release gates; reject unknown or conflicting modes without provider actions). Security-forensic or containment work keeps `cyber-triage` authority and custody, statistical control bands and scan deltas stay with `monitor-respond`, and an incident-owned execution grant is a procedure call returning once, not fresh intake.
+   - Production incident or urgent regression with active harm -> `incident-hotfix`
    - Control-band breach or scheduled security-scan result needs tiered diagnosis -> `monitor-respond`
    - Bug ticket needs fix (non-urgent) -> `dev-fix`
-   - Ticket or cross-functional change needs specialist fanout, AC coverage, and PR metadata review -> `review-ticket`
+   - PR diff, ticket, or cross-functional change needs focused or ticket-enriched review, AC coverage, PR metadata, or scoped specialists -> `code-review`
    - Design arrives as an artifact (diagram, doc, board export, IaC) and needs review -> `review-system-design`
-   - PR diff needs focused merge-risk review -> `code-review`
    - Implementation GREEN but ACs lack executable E2E/mobile coverage, or an E2E suite is red after a previously green slice -> `test-loop`.
    - Code complete but unproven -> `verify-work`
    - Fix implemented and ticket has a UAT/Jira flow -> `verify-bug`
    - `verify-work` PASS on a feature, business acceptance not yet granted -> `uat-signoff`
    - Business acceptance granted and release window open -> `deploy-release`
+   - Post-release observation window open, registered metric review, or value evaluation -> `review-product-value` (when selected/installed; else `publish-notes` with capability gap)
    - Deployed and needs user-facing communication -> `publish-notes`
    - Trace health unknown before release or handoff -> `traceability-audit`
    - Session ending with unfinished work or context handoff -> `session-report`
    - Deployed or communicated, capture standards/process lessons -> `retro-learn`
    - Repo-wide health/debt question with no single feature in scope -> `codebase-review`
-
 3. Enforce handoff quality:
-   - BA output must include business objective, stakeholder/validation owner, AS-IS/TO-BE, SMART metric, scope fence, risks, assumptions, and BRD objective IDs.
-   - PM output must link each PRD requirement and AC to a BRD objective, name requirement owners/status/priority, define rollout/ops, and identify whether `design-solution` is required.
-   - IT Department handoff must include implementation owner candidates, affected repos/modules, test lanes, environments, release/rollback notes, and open blockers.
-   - Never route directly to implementation when BRD/PRD/SRS trace, owner, or testable ACs are missing; route to BA/PM/design first.
-   - This applies even when the request explicitly says "implement" or names a specific feature/module: if `docs/brd/` and `docs/prd/` have no matching `[slug]` for it yet, the FIRST slice dispatched must be a `brainstorm-feature` or `plan-feature` intake slice (owner `ba-agent`/`pm-agent`) — never an `implementation-readiness`/`design-solution`/`implement-feature` slice as slice-01. Missing repo roots, OAuth/client IDs, or session-policy decisions are a sign the BRD/PRD step was skipped, not questions to resolve inline in an implementation slice.
-   - Keep payloads runtime-neutral; adapters may map them to task boards, MCP, Jira, GitHub, ADO, Zephyr, or local files.
-
-4. Set runtime state:
-   - Interactive: ask max 3 blocking questions.
-   - Autonomous/channel: continue only when required artifacts and owners are known; otherwise return BLOCKED.
-   - Emit next workflow, handoff payload, verification command, and owner.
-   - Tier drives autonomy: low -> autonomous + `fast` review; medium -> TDD + self-review + `deep` review; high -> plan-first HARD STOP, independent reviewers, human merge approval.
-
+   - Governed/high-risk delivery requires full traceability: BA output links business objectives; PM links requirements/ACs in `docs/prd/`; IT handoff defines architecture in `docs/srs/`.
+   - Low-risk maintenance exception: Sufficiently specified routine fixes/maintenance with approved in-chat/brief contract route directly to `dev-fix` or `implement-feature` without creating separate BRD/PRD/SRS files or restarting intake; set `delivery_mode: brief` and carry outcome, scope fence, owner, observable criteria, approval reference, and verification lane. Never waives behavioral ACs, owner, approval, scope fence, or verification lane, and never lowers the sensitive-change floor. Negative or inconclusive product evidence requires no-build, pivot, or bounded learning—never unconditional full build.
+   - Evidence lanes stay separate: technical verification (`verify-work`), business acceptance (`uat-signoff`), and release (`deploy-release`) are distinct referenced decisions.
+   - A technical PASS never grants business acceptance or deployment authority; absent evidence is `not assessed`, never success.
+   - Required-scope audits only where the lane applies: governed documents use `rtk pnpm audit:trace --slug <slug> --required`; required run records use `rtk pnpm audit:outcome --records --required --slug <slug> --workflow <workflow> --run-id <run-id>`; brief tickets acquire no document-trace gate. Registry-wide discovery stays optional. Live host actions keep their independent authorization checks.
+   - Reopen affected scope only: a stale or disputed decision blocks only its consuming action, unaffected approved decisions and independent scopes stay reusable without global reset, and changing requirements review affected ACs, contracts, approvals, and evidence without reopening settled decisions; product scope gaps route to planning and technical contract uncertainty routes to design.
+   - Changes touching auth, payments, data integrity, secrets, or trust boundaries enforce minimum `tier=medium` (or `tier=high`), requiring `design-solution` and human approval before coding.
+   - Downstream specialist workers execute assigned briefs without repeating parent intake; keep payloads runtime-neutral so adapters may map them to task boards, MCP, Jira, GitHub, ADO, Zephyr, or local files.
+4. Set autonomy by tier: low -> autonomous + `fast` review; medium -> TDD + self-review + `deep` review; high -> plan-first HARD STOP, independent reviewers, human merge approval.
 ## Runtime Contract
-- Use to select the next workflow without loading every workflow body.
-- Required inputs: user request plus repo/artifact state.
-- Return BLOCKED only in autonomous/channel mode when required artifacts or owners are unknown.
+- Use to select the next workflow without loading every workflow body; inputs are the user request plus repo/artifact state. Return BLOCKED only in autonomous/channel mode when required artifacts or owners are unknown; in autonomous/channel mode, continue only when required artifacts and owners are known and emit next workflow, handoff payload, verification command, and owner.
 ## Handoff Payload
-- `slug`, `operator_profile`, `snc_tier`, `model_tier`, recommended workflow, requirement layer, handoff owner, required input, blocking gaps, offshore delivery notes.
+- `slug`, `operator_profile`, `snc_tier`, `model_tier`, `delivery_mode`, work-item reference plus source revision, approval reference, recommended workflow, requirement layer, handoff owner, required input, blocking gaps, evidence-lane refs (technical/acceptance/release, `not assessed` when absent), offshore delivery notes.
 ## Blocking Questions
-- Ask max 3 at a time with a recommended default and 2-3 options.
-
+- Ask max 3 at a time with a recommended default and 2-3 options. Interactive mode asks blocking questions when required artifacts or owners are unknown; autonomous/channel mode is not required to ask.
 ## Output Template
-
 ```md
 # SDLC Route
-
 ## Recommended Workflow
-
 ## Requirement Layer
-
+## Delivery Mode And Work Item
+- Delivery mode: brief | standard | extended (routing decision from approved evidence and risk, never automatic brief permission)
+- Authoritative work item + revision: [ticket/plan/task-list reference @ revision]
+- Owner / approval reference: [owner] / [approval ref]
+- Evidence lanes: technical [not assessed], acceptance [not assessed], release [not assessed]
 ## Handoff Owner
-
 ## Required Input
-
 ## Blocking Gaps
-
 ## Offshore Delivery Notes
-
 ## Outcome Report
 {schema_version: 1, run_id: "[run-id]", slug: "[slug]", workflow: sdlc, feature_status: not_started, started_at: "[timestamp]", completed_at: "[timestamp]", requirement_trace: {brd_objectives: [], requirements: [], acceptance_criteria: [], srs: []}, completed_evidence: [], missing_evidence: [], decision_needed: [], recommended_next_workflow: brainstorm-feature, cost: {source: unavailable}, agent: {identity: "[agent-identity]", model: "[model]"}}
-
 ## Next Workflow
-
 ## Verification Command
 ## Cost Report
 Call `get_session_cost(workflow="sdlc")` before final handoff.

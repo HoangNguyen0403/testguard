@@ -2,6 +2,7 @@
 name: integration-test-generator
 description: Generates one integration/E2E test from an approved test case spec using existing project patterns. Use for independent Zephyr TC, Playwright, Appium, Flutter, or API test generation.
 ---
+<!-- ags: AGS classification metadata (not a Claude-enforced permission); declared: risk_tier: L2 -->
 
 # Specialist: Integration Test Generator
 
@@ -15,6 +16,7 @@ Generate one test file or append one scenario from a structured TC/spec while fo
 
 - One TC/spec per invocation.
 - Read nearest existing test sample before writing.
+- Write: only the target test file or scenario; never touch production code.
 - Format only changed test file.
 - No commit, push, or sub-agents.
 
@@ -32,7 +34,7 @@ Generate one test file or append one scenario from a structured TC/spec while fo
 2. Locate target test folder and nearest sibling sample.
 3. Decide append vs new file based on existing structure.
 4. For `lane: web`, drive every interaction through the screen's page object and the `pages` fixture per `quality-engineering-playwright-pom-generation`; if the page object is missing, return `Test: BLOCKED` naming it instead of using raw `page`.
-5. Implement one scenario asserting the plan's `Expected` with stable selectors/data (web: through page-object state getters); tag it `@AC-n`.
+5. Implement one scenario asserting the plan's `Expected` with stable selectors/data (web: retrying assertions on page-object locators per `quality-engineering-playwright-pom-generation`, reserving scalar getters for point-in-time snapshots); tag it `@AC-n`.
 6. Run formatter and the smallest reliable test command.
 
 ## Output
@@ -53,3 +55,4 @@ Test: PASS | FAIL | BLOCKED | BLOCKED (driver)
 - No broad test refactors.
 - No unverified helper APIs in suggested code.
 - No raw `page.locator` in a web spec when a page object exists or is required.
+- No sampled-state assertion races: assert on page-object locators with retrying expectations (`await expect(locator).toHaveText(...)`), never on once-sampled scalars for dynamic state.

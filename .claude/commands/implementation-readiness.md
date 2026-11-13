@@ -22,50 +22,58 @@ Execute the following steps using the input above.
 Goal: Decide whether a planned change is ready for implementation or must return to planning/design.
 
 ## Steps
-
 1. Load artifacts:
-   - BRD-lite brief, PRD/story, SRS/FRS notes, UX/design links, implementation plan, test plan.
-   - Jira/GitHub/GitLab/ADO/Figma/Confluence MCP context when configured; otherwise use exported docs or local files.
+   - Load task-linked approved brief/ticket, PRD/story or equivalent approved evidence, canonical ledger (`docs/product/<slug>/evidence.json`) when present, optional verification kit/journey map reference (`docs/verification/<app>/`, an explicit task-supplied path, or accessible equivalent per the installed `common/common-project-verification` skill) when supplied, SRS/FRS when needed, UX/design evidence, implementation plan, and test plan.
+   - Do not require a separate filename when an approved task record supplies the necessary information; missing documents do not force repeat intake. An accessible existing equivalent suffices without requiring new kit authoring. A matching record and stable slug are required; unrelated documents/working-tree changes are not authority or approval.
+   - Carry the delivered `delivery_mode`, authoritative work-item reference plus source revision, owner, and approval reference from the handoff; do not re-infer them from filenames or surprising tree state.
+   - Readiness consumes evidence-lane references, never their claims: technical verification, business acceptance, and release remain separate decisions, and an absent reference is `not assessed`.
 
 2. Check readiness:
-   - Brief has its lane contract (Why: business goal, stakeholder, AS-IS to TO-BE, measurable metric; Direction: outcome, constraints, non-goals, acceptance criteria) and `approval`: `approved` passes, `pending` blocks, `assumed-autonomous` warns and blocks only when `snc_tier=high`.
-   - ACs atomic, testable, scoped by platform/market/role where relevant.
-   - PRD has stable requirement IDs, AC IDs, owner, priority, status, and last-updated note.
-   - SRS/FRS identifies touched modules, API/data/interface changes, migrations, permissions, failure modes, and NFR thresholds.
-   - Requirement trace is complete: BRD objective -> PRD requirement -> SRS/FRS contract -> test lane.
-   - UX/design states cover loading, empty, error, permission, and responsive/mobile cases when UI changes.
-   - Test strategy maps ACs to unit, integration, E2E/mobile, security, and Zephyr/manual coverage.
-   - Tool prerequisites known: credentials, environments, feature flags, test data, MCP availability.
-
+   - Approved task record supplies outcome, constraints/non-goals, testable ACs, owner and approval; equivalent approved low-risk evidence suffices without separate BRD/PRD/SRS files. `delivery_mode: brief` requires only that record with outcome, scope fence, owner, observable criteria, approval reference, and verification lane; missing formal IDs are expected, while a sensitive change is never ready as `brief`. `approval: approved` passes; `pending` blocks; `assumed-autonomous` warns and blocks only when `snc_tier=high`. Sensitive trust-boundary changes still require applicable design/human floor.
+   - ACs have one observable behavior per AC across happy, edge, and error paths, with necessary preconditions and platform/market/role scope; truth tables for interacting conditions. Examine scope coverage and conflicts before issuing READY or PARTIAL; consequential conflicts block affected slices with consequence, owner, and required input without inventing business/error policy.
+   - Affected-scope evidence freshness and current authority: stale proof (changed source/build/journey identity) or disputed decisions block only the consuming action/affected slice, requiring reproof while unrelated applicable evidence is retained; stale evidence cannot produce PASS.
+   - Verification kit prerequisites: when a task supplies a kit reference (`docs/verification/<app>/`, an explicit task-supplied path, or an accessible equivalent per the installed `common/common-project-verification` skill), verify target prerequisites (app build/digest, driver, seed data, healthy instance). No supplied reference is not a blocker by itself: equivalent project instructions suffice and new kit authoring is never required. An explicitly supplied path that is missing or inaccessible blocks only its dependent scope; record the exact gap and accountable owner, and never silently substitute another kit or target. When a referenced kit or journey prerequisite (environment, driver, data, authority) is unavailable, record the exact gap, accountable owner, and affected slice without blocking independent approved work or inventing commands. A kit reference never supplies missing human authority, bypasses platform gates, or acts as a runtime PASS.
+   - Human risk acceptance: where lawful, an explicit recorded release `risk_accept` decision documents uncertainty and rationale; it waives specific baseline sources for release only, but never converts unvalidated/inconclusive evidence into validated proof, and cannot authenticate host approval. An investment `risk_accept` documents uncertainty and rationale without waiving evidence or altering product state. Missing monetary data is not a qualitative-investment blocker.
+   - Optional product capability gap: if optional product-evidence capability (`product-evidence` / `product-management` package / script / Node >=20) is absent, record exact gap in `missing_evidence` (e.g. `Capability gap: <pkg> not installed; opt in at a reviewed ref and sync`), preserve `feature_status`, and treat product gate result as an unvalidated proposal only; other missing required tooling or environment remains a BLOCKED prerequisite for the affected slice.
+   - Available requirement/design evidence identifies affected modules and consequential API/data/interface/migration/permission/failure/NFR choices; unresolved sensitive or consequential choices route to technical design and human approval.
+   - Trace ACs across 4 V-Model levels (Acceptance, System, Integration, Unit) per `skills/quality-engineering/quality-engineering-test-plan-authoring/references/lifecycle-and-roles.md` (STLC Stages 1-2); low-risk changes use equivalent existing evidence.
+   - UX/design evidence covers loading, empty, error, permission, responsive/mobile cases when UI changes.
+   - Mobile readiness (Contract C6): app build/digest/version, OS/device matrix, driver preflight (`appium-mcp`/native runner), permissions, test data/reset (distinguish `fullReset`, `noReset`, real binary upgrade where `noReset != real upgrade`, and state preservation for prior build/session/offline queue), lifecycle mechanism (warm resume vs config change vs true process death where `ActivityScenario.recreate != process death`). Missing build or driver blocks affected mobile slices.
+   - Test strategy maps ACs to unit, integration (API contracts/dependencies), system (E2E/mobile), security, Zephyr/manual lanes; tool prerequisites known (credentials, environments, feature flags, test data, MCP). Schedulable delivery dependencies required; unresolved prerequisites block affected slices.
 3. Decide:
-   - READY: BA/PM/SRS/test prerequisites are present and implementation can start.
-   - BLOCKED: missing artifact, owner, unclear AC, missing design/architecture, unavailable environment, or unresolved risk.
-   - PARTIAL: only named slices can start; blocked slices have explicit owner/input.
+   - READY: approved evidence, owner, ACs, required design/approval and test prerequisites permit named slice(s) to start.
+   - BLOCKED: required authority/approval, owner, unclear AC, consequential design, environment, or risk unresolved; do not recommend unconditional implementation.
+   - PARTIAL: name each independently bounded ready slice with owner, approval and verification lane; name each blocked slice with its owner, dependency/input and reason. Only ready slices may flow downstream.
 
 4. Route:
-   - For autonomous/channel mode, return READY only with named slices, owners, verification lanes, and available environments.
+   - For autonomous/channel mode, return READY only with named slices, owners, verification lanes, approval and available required environments.
    - READY -> `implement-feature` or `dev-fix`.
-   - BLOCKED -> `plan-feature` or `design-solution`.
-   - PARTIAL -> slice task list plus blockers.
-   - Write the run record to `artifacts/runs/[slug]/[compactISO]-implementation-readiness.json` when file writes are allowed.
-
+   - BLOCKED -> `plan-feature` or `design-solution`; do not emit unconditional implementation recommendation.
+   - PARTIAL -> send only explicitly ready slices downstream with their blockers and owners; downstream execution cannot absorb blocked slices or claim their activation.
+   - Write run record to `artifacts/runs/[slug]/[compactISO]-implementation-readiness.json` when writes allowed.
 ## Runtime Contract
 - Use before implementation starts to gate go/no-go.
-- Required inputs: BRD-lite/PRD/SRS artifacts plus a test strategy to check against.
-- Return BLOCKED only when a required artifact, owner, AC, design, environment, or risk is unresolved.
+- Required inputs: matching approved task record/ticket or equivalent evidence, owner, testable ACs and design/test prerequisites applicable to each proposed slice. Missing filenames do not force repeat intake.
+- Return BLOCKED only when required authority/approval, owner, unclear AC, consequential design, environment, or risk remains unresolved.
 ## Handoff Payload
-- `slug`, verdict (READY/BLOCKED/PARTIAL), ready slices, blocking gaps, outcome report, next workflow.
+- `slug`, `operator_profile`, `delivery_mode`, work-item reference plus source revision, approval reference, verdict (READY/BLOCKED/PARTIAL), ready slices with criteria refs and verification lanes, blocking gaps, capability gaps, evidence-lane refs, outcome report, next workflow.
 ## Blocking Questions
 - Ask max 3 at a time with a recommended default and 2-3 options.
-
 ## Output Template
 
 ```md
 # Implementation Readiness
 
+## Delivery Mode And Work Item
+- Mode: brief | standard | extended; work item + revision: [ref @ rev]; owner: [owner]; approval: [ref or pending]
+- Evidence lanes: technical [not assessed], acceptance [not assessed], release [not assessed]
+
 ## Verdict
 
 ## Ready Slices
+| Slice | Owner | Criteria refs | Verification lane |
+| --- | --- | --- | --- |
+| [slice] | [owner] | [REQ/AC or observable criteria] | [lane] |
 
 ## Blocking Gaps
 

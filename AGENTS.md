@@ -46,7 +46,7 @@ Each `_INDEX.md` has two sections - follow both:
 | File type | Read category index |
 | --------- | ------------------- |
 | `*.go`, `*_test.go` | `<SKILLS>/golang/_INDEX.md` |
-| `*.spec.ts`, `*.test.ts` | `<SKILLS>/common/_INDEX.md` |
+| `*.json`, `*.md`, `*.spec.ts`, `*.test.ts` | `<SKILLS>/common/_INDEX.md` |
 | Any file (keyword match) | `<SKILLS>/common/_INDEX.md` |
 | QE workflow | `<SKILLS>/quality-engineering/_INDEX.md` |
 | Architecture or scale request | `<SKILLS>/system-design/_INDEX.md` |

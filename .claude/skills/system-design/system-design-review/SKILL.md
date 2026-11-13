@@ -17,7 +17,7 @@ metadata:
 
 ## **Priority: P1 (HIGH)**
 
-Score against evidence, not intent. A claim with no number or artifact scores zero.
+Score claims against evidence appropriate to the declared review scope. A proposed design may support a design-readiness verdict through stated mechanisms and planned validation; it cannot claim operational readiness from plans alone. An implementation review requires implementation evidence; an operations claim requires production runtime/deployment evidence.
 
 ## Nine Axes (score each applicable axis 0-10)
 
@@ -25,13 +25,25 @@ Score against evidence, not intent. A claim with no number or artifact scores ze
 | --- | --- | --- |
 | Requirements | Functional, NFR, and out-of-scope written with owners | Only a feature description exists |
 | Capacity evidence | Peak QPS, storage, and bandwidth computed and current | Numbers absent or older than the last traffic change |
-| Redundancy | No SPOF; failover drilled with a measured RTO | Single instance or untested failover on a critical path |
-| Data scaling | Access patterns mapped, ownership single, growth path stated | One shared store, no growth plan, unbounded tables |
+| Redundancy | Failure domains, recovery mechanisms and ownership fit the stated objective; proposals include validation criteria, operations claims require measured drills when recovery is in scope | Critical SPOF or no viable recovery for the stated objective |
+| Data scaling | Access patterns mapped, ownership single, growth path stated; query amplification diagnosed via canonical database-query-performance; copies/authority checked | One shared store, no growth plan, unbounded tables, or an unmitigated amplification/copy risk |
 | Caching | Hot read paths cached with TTL and invalidation defined | No cache on a proven hot path, or uninvalidatable cache |
-| Async offload | Slow and bursty work queued with drain rate and DLQ | Everything synchronous on the request path |
-| Observability | Traffic, error, latency, saturation instrumented with owned alerts | Logs only, or alerts with no runbook |
+| Async offload | Slow/bursty work is isolated when required by stated SLO or failure constraints, with bounded drain/recovery; bounded synchronous work is valid when it meets them | Required isolation is absent or synchronous coupling violates the stated constraints |
+| Observability | Journey indicators, signal/alert ownership, runbooks and validation fit declared scope; operations claims require observed SLO/telemetry | No relevant journey signals, owner or response path for a material risk |
 | Rollout | Canary or flag with metric rollback trigger and reversible migrations | Big-bang deploy, irreversible migration |
 | Cost proportionality | Spend is sized to the traffic and the risk, and someone can state it | Topology bought for an imagined scale nobody measured |
+
+## Non-Compensable Flow Gates
+
+Apply gates to material risks in the declared scope, independent of the aggregate score. A failed gate blocks a sound verdict/readiness claim; points on unrelated axes cannot compensate. Report the evidence, user consequence, owner, adverse timeline, smallest corrective action, and trace to the violated invariant. A justified `N/A` applies only when that concern is genuinely outside the declared flow/risk scope and records why.
+
+- **Correctness:** lost, duplicated, reordered, or stale effects violate the user/business invariant; missing acknowledgment/reconciliation leaves the outcome unknown without a safe resolution.
+- **Tenant authorization:** a flow crosses or exposes tenant data without enforcement at the relevant trust boundary.
+- **Sensitive data and deletion:** sensitive data is mishandled, or a deletion/retention promise fails across authoritative and derived copies, including replay or offline sync.
+- **Migration:** a backfill, CDC, cutover, rollback, or restore can lose or overwrite authoritative data, or exposes unverified state as current.
+- **Recoverability:** material data loss/downtime has no viable in-scope recovery mechanism or the claimed recovery outcome is unsupported at the declared lifecycle scope.
+
+These gates do not require every proposal to prove deployment or operations. Proposals need sufficient mechanisms, assumptions, and planned checks for design readiness; implementation and operations claims require their corresponding evidence.
 
 Report each applicable axis with evidence and a declared profile weighting. Use an applicable-axis denominator
 (`10 × applicable-axis count`), not a fixed `/90`, when an axis is justified `N/A`.
@@ -43,11 +55,11 @@ Report each applicable axis with evidence and a declared profile weighting. Use 
 - Review HLD and LLD as one trace: requirements and shaping decisions must resolve into component ownership, contracts, verification, and a stated changed-constraint trigger. A diagram is optional when prose answers the question.
 - Separate lifecycle (`proposed|implemented|retired`), source kind (`code|document|runtime|deployment`), and evidence confidence (`unverified|assumed|documented|observed`). Code/document citations are `documented`, not deployment proof; runtime/deployment captures may be `observed`. `assumed` and `unverified` carry no citation; explicit citations require `evidence_kind`.
 
-## Independent Semantic Review
+## Scope-Qualified Semantic Review
 
 Lexical checks are smoke signals, not proof of a sound design. Apply the independent behavioral rubric in
-[semantic evaluation](references/semantic-evaluation.md) and record missing calculations, mechanisms,
-adverse timelines, invariants, or recovery as findings even when the expected vocabulary appears.
+[semantic evaluation](references/semantic-evaluation.md). Record missing calculations, mechanisms,
+adverse timelines, invariants, recovery, and scope-specific evidence as findings even when expected vocabulary appears.
 
 ## Review Method
 
@@ -67,14 +79,15 @@ adverse timelines, invariants, or recovery as findings even when the expected vo
 - Queue with no drain-rate budget, no DLQ, and alerting on depth rather than age.
 - Alerts on CPU rather than user-visible symptoms or error-budget burn.
 - Migration and code shipped as one irreversible step.
-
+- Suspected N+1 loop treated as measured bottleneck without trace, or fixed with blanket giant JOIN/cache.
+- Redundant N+1 spare compute nodes confused with database query amplification.
 ## Anti-Patterns
 
 - **No score without evidence**: cite the metric, artifact, or drill; otherwise mark `UNVERIFIED`.
 - **No rewrite recommendation by default**: prefer the smallest fix that removes the proven bottleneck.
 - **No uniform severity**: rank by user impact and reversibility, not by axis order.
 - **No finding without a next action**: every gap gets an owner-ready fix.
-
+- **No blanket giant JOIN fix**: joining relations multiplies rows and corrupts pagination; recommend bounded batching.
 ## References
 
 - [Scorecard](references/scorecard.md) - scoring rubric, weighting guidance, report template

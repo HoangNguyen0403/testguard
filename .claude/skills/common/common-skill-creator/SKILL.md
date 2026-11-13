@@ -33,7 +33,7 @@ Applies to **every skill in this registry**. Maximize **Token ROI**. Every line 
 4. **Test** — spawn parallel subagents: one with-skill, one without-skill (baseline)
 5. **Evaluate** — grade assertions, review benchmark (pass rate, tokens, time)
 6. **Iterate** — rewrite based on feedback, rerun into next iteration dir, repeat
-7. **Optimize description** — run trigger eval queries, target ≥80% accuracy
+7. **Optimize description** — run trigger eval queries, target ≥90% accuracy (matching release readiness)
 8. **Pressure-test** — for discipline skills, capture agent excuses, red flags, and stop conditions
    **Existing skill:**
 9. **Audit** — run Quality Checklist below; identify violations
@@ -55,37 +55,37 @@ Applies to **every skill in this registry**. Maximize **Token ROI**. Every line 
 - **Trigger Hint**: Include `(triggers: *.ext, keyword)` suffix for technical skills.
 ## Content Quality (Implementation)
 
-- **No Redundant Knowledge**: **NOT** explain concepts AI already knows (e.g., HTTP status codes, standard library docs, basic SOLID principles). Focus strictly on _project-specific_ rules.
-- **Caveman Compression**: Use "Caveman Mode" for rules to save tokens. Drop articles (, , ), remove filler words ("should", "will", "), and use telegraphic snippets.
-- _Standard_: "You should ensure that database connection closed after every query to prevent leaks." (15 tokens)
-- _Caveman_: "Close DB connection after query. Prevent leaks." (7 tokens)
-- **Actionability**: Examples must copy-paste ready and executable.
+- **No Redundant Knowledge**: Do NOT explain concepts AI already knows (e.g., standard HTTP codes, common language syntax, basic SOLID definitions). Focus strictly on project-specific rules and constraints.
+- **Readable Compact Style**: Size is an editorial budget, not a behavioral quality claim. Prefer readable, compact, imperative language over filler words, conversational phrasing, or speculative prose.
+- **Actionability**: Examples must be copy-paste ready and executable.
 - **Workflow Clarity**: Use sequential ordered lists for multi-step processes.
 - **Progressive Disclosure**: Move code blocks >10 lines to `references/`.
 - **Pressure Hardening**: Discipline skills must name red flags, common excuses, and exact stop/restart conditions.
-## Behavior Guardrails
 
-- **Use pressure tests for discipline skills**: TDD, debugging, verification, review, protocol, and workflow skills need baseline failure evidence.
-- **Capture rationalizations**: Save the exact excuses agents use when they skip the rule.
-- **Add red flags**: Short phrases that tell the agent to stop and restart the protocol.
-- **Encode behavior in evals**: Add `pressure_scenarios`, `rationalizations`, `red_flags`, and `behavior_assertions` when the skill is guardrail-oriented.
-- **Keep it local**: Put behavior details in evals or `references/`; keep `SKILL.md` compact.
+## Evidence Tiers & Guardrails
+
+- **Three Evidence Tiers**: Distinguish (1) structural checks, (2) textual transcript evidence, and (3) executable outcomes.
+- **Oracle & Pressure Hardening**: Pressure `behavior_assertions` are positive contains/token checks, not semantic safety guarantees. Regular typed assertions + finite decision-shape controls must reject keyword-stuffed refusal-plus-violation answers; do not claim keyword presence alone establishes compliance. Oracles must test valid paraphrases, quoted unsafe text in refusals, keyword stuffing, partial compliance, and routing negatives; never encode a decision as a bare substring ban on wording a compliant refusal may quote.
+- **Digest Binding & Thresholds**: Bind scorer, evals, and generated metadata digests to candidate checkout; no engine-mismatch waiver. Target ≥90% trigger rate (recall & specificity per `readiness.ts`). Retain host guardrails until verified deterministic runtime enforcement replaces them.
+- **Discovery & Publication Preflight**: Distinguish search failure/checkout absence from absent capability (search authorized refs/worktrees first). When publishing registry or native export packages, verify final canonical→host ID-set and resource parity and real consumer discovery; review private paths/links and one-way manifests; separate warnings/skips/NOT RUN. Keep publication separate from activation.
+
 ## Anti-Patterns
 
-- **No "AI-splaining"**: not explain why pattern good unless it's unique project constraint.
-- **No Vague Triggers**: Never use `src/**` or `**/*`. surgical.
-- **No Description Bloat**: If description exceeds 100 words, some capabilities belong in body.
-- **No long code blocks**: >10 lines → extract to `references/`
-- **No redundancy**: don't repeat frontmatter content in body
-- **No untested guardrails**: Rules that were never pressure-tested are speculation.
+- **No "AI-splaining"**: Do not explain why a pattern is good unless it is a unique project constraint.
+- **No Answer-Anchor Padding**: Do not insert arbitrary keywords solely to satisfy string-match tests or fake compliance.
+- **No Search-Absence Conflation**: Do not assume missing local search = absent capability; search authorized refs/worktrees.
+- **No Vague Triggers**: Never use `src/**` or `**/*`. Keep triggers surgical.
+- **No Description Bloat**: If description exceeds 100 words, move capabilities to body.
+- **No Long Code Blocks**: Blocks >10 lines must be extracted to `references/`.
+- **No Untested Guardrails**: Rules not validated against baseline failure are unverified speculation.
+
 ## Quality Checklist (Tessl-Aligned)
 
-- [ ] **Activation ≥ 90%**: Description covers both capabilities ("What") and triggers ("When").
+- [ ] **Activation ≥ 90%**: Description covers capabilities ("What") and triggers ("When").
 - [ ] **Implementation ≥ 90%**: No general-purpose explanations; all examples executable.
 - [ ] **Structural Compliance**: SKILL.md ≤ 100 lines; code blocks moved to `references/`.
-- [ ] Trigger rate ≥80% on should-trigger queries.
-- [ ] Guardrail skills include rationalizations, red flags, behavior eval fields, and `should_trigger`/`should_not_trigger` cases.
-
+- [ ] Trigger rate ≥90% on should-trigger queries (recall and specificity per readiness gate).
+- [ ] Guardrail skills include rationalizations, red flags, behavior eval fields, and should/should-not trigger cases.
 ## References
 
 - [Skill Template](references/TEMPLATE.md) — load when starting new skill from scratch
