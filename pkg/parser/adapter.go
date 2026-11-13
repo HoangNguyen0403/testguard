@@ -28,6 +28,13 @@ type TestUnit struct {
 	SeedBody   string   `json:"seed_body,omitempty"`
 	ActBody    string   `json:"act_body,omitempty"`
 	ExpectBody string   `json:"expect_body,omitempty"`
+	// Scope identifies the enclosing describe/group/class chain (titles joined
+	// by " > "); empty for top-level tests. Tests in different scopes run under
+	// different setup, so they are never compared as clones of each other.
+	Scope string `json:"scope,omitempty"`
+	// Meta carries adapter-specific facts that language rules need but that
+	// have no cross-language meaning (e.g. the Dart blocTest state type).
+	Meta map[string]string `json:"-"`
 
 	// ASTDecl holds an optional language-specific AST declaration (e.g. *ast.FuncDecl for Go).
 	// Excluded from JSON serialization to maintain cross-language model contracts.

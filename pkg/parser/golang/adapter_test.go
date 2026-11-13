@@ -1555,3 +1555,401 @@ func TestHollow(t *testing.T){_ = gomock.NewController(t);log:=logger{};log.EXPE
 		t.Errorf("expected 0 assertions for same-file EXPECT non-mock, got %v", units[0].Assertions)
 	}
 }
+
+func TestAC1_GomegaAssertions(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	. "github.com/onsi/gomega"
+)
+
+func TestGomegaDotImport(t *testing.T) {
+	g := NewWithT(t)
+	g.Expect(1).To(Equal(1))
+}
+
+func TestGomegaPackageLevelDot(t *testing.T) {
+	Expect(1).To(Equal(1))
+}
+
+func TestGomegaEventually(t *testing.T) {
+	g := NewWithT(t)
+	g.Eventually(func() int { return 1 }).Should(Equal(1))
+}
+
+func TestGomegaConsistently(t *testing.T) {
+	g := NewWithT(t)
+	g.Consistently(func() int { return 1 }).ShouldNot(Equal(2))
+}
+
+func TestGomegaNewWithTWithoutExpect(t *testing.T) {
+	g := NewWithT(t)
+	_ = g
+}
+`)
+	units, err := adapter.LocateTests(source, "gomega_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	if len(unitMap["TestGomegaDotImport"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaDotImport, got empty")
+	}
+	if len(unitMap["TestGomegaPackageLevelDot"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaPackageLevelDot, got empty")
+	}
+	if len(unitMap["TestGomegaEventually"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaEventually, got empty")
+	}
+	if len(unitMap["TestGomegaConsistently"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaConsistently, got empty")
+	}
+	if len(unitMap["TestGomegaNewWithTWithoutExpect"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for TestGomegaNewWithTWithoutExpect, got %v", unitMap["TestGomegaNewWithTWithoutExpect"].Assertions)
+	}
+}
+
+func TestAC1_GomegaQualifiedAssertions(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	omg "github.com/onsi/gomega"
+)
+
+func TestGomegaQualified(t *testing.T) {
+	g := omg.NewWithT(t)
+	g.Expect(1).To(omg.Equal(1))
+}
+
+func TestGomegaNewGomegaWithT(t *testing.T) {
+	g := omg.NewGomegaWithT(t)
+	g.Expect(1).ToNot(omg.Equal(2))
+}
+
+func TestGomegaPackageLevelQualified(t *testing.T) {
+	omg.Expect(1).NotTo(omg.Equal(2))
+}
+`)
+	units, err := adapter.LocateTests(source, "gomega_qual_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	if len(unitMap["TestGomegaQualified"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaQualified, got empty")
+	}
+	if len(unitMap["TestGomegaNewGomegaWithT"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaNewGomegaWithT, got empty")
+	}
+	if len(unitMap["TestGomegaPackageLevelQualified"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestGomegaPackageLevelQualified, got empty")
+	}
+}
+
+func TestAC1_QuicktestAssertions(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"testing"
+	qt "github.com/frankban/quicktest"
+)
+
+func TestQuicktestAssert(t *testing.T) {
+	c := qt.New(t)
+	c.Assert(1, qt.Equals, 1)
+}
+
+func TestQuicktestCheck(t *testing.T) {
+	c := qt.New(t)
+	c.Check(1, qt.Equals, 1)
+}
+
+func TestQuicktestPkgAssert(t *testing.T) {
+	qt.Assert(t, 1, qt.Equals, 1)
+}
+
+func TestQuicktestPkgCheck(t *testing.T) {
+	qt.Check(t, 1, qt.Equals, 1)
+}
+
+func TestQuicktestNoAssert(t *testing.T) {
+	c := qt.New(t)
+	_ = c
+}
+`)
+	units, err := adapter.LocateTests(source, "qt_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	if len(unitMap["TestQuicktestAssert"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestQuicktestAssert, got empty")
+	}
+	if len(unitMap["TestQuicktestCheck"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestQuicktestCheck, got empty")
+	}
+	if len(unitMap["TestQuicktestPkgAssert"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestQuicktestPkgAssert, got empty")
+	}
+	if len(unitMap["TestQuicktestPkgCheck"].Assertions) == 0 {
+		t.Errorf("expected assertions for TestQuicktestPkgCheck, got empty")
+	}
+	if len(unitMap["TestQuicktestNoAssert"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for TestQuicktestNoAssert, got %v", unitMap["TestQuicktestNoAssert"].Assertions)
+	}
+}
+
+func TestAC1_ExternalAssertionHelper(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import (
+	"fmt"
+	"testing"
+	"example.com/app/internal/testutil"
+)
+
+func TestExternalHelperValid(t *testing.T) {
+	testutil.AssertEqual(t, 3, 3)
+}
+
+func TestExternalHelperDiff(t *testing.T) {
+	testutil.ValidateDiff(t, "a", "b")
+}
+
+func TestExternalHelperNoTParam(t *testing.T) {
+	testutil.AssertEqual(nil, 3, 3)
+}
+
+func TestExternalHelperNonAssertName(t *testing.T) {
+	testutil.SetupDatabase(t)
+}
+
+func TestStdlibNotExternalHelper(t *testing.T) {
+	fmt.Sprintf("not an assertion: %v", t)
+}
+`)
+	units, err := adapter.LocateTests(source, "ext_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	uValid := unitMap["TestExternalHelperValid"]
+	if len(uValid.Assertions) != 1 || uValid.Assertions[0] != "external-helper:testutil.AssertEqual" {
+		t.Errorf("expected [external-helper:testutil.AssertEqual], got %v", uValid.Assertions)
+	}
+
+	uDiff := unitMap["TestExternalHelperDiff"]
+	if len(uDiff.Assertions) != 1 || uDiff.Assertions[0] != "external-helper:testutil.ValidateDiff" {
+		t.Errorf("expected [external-helper:testutil.ValidateDiff], got %v", uDiff.Assertions)
+	}
+
+	if len(unitMap["TestExternalHelperNoTParam"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for helper without t param, got %v", unitMap["TestExternalHelperNoTParam"].Assertions)
+	}
+	if len(unitMap["TestExternalHelperNonAssertName"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for helper without assert name, got %v", unitMap["TestExternalHelperNonAssertName"].Assertions)
+	}
+	if len(unitMap["TestStdlibNotExternalHelper"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for stdlib call, got %v", unitMap["TestStdlibNotExternalHelper"].Assertions)
+	}
+}
+
+func TestProof_StylesTestAllTestUnitsHaveAssertions(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package probe
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
+
+	qt "github.com/frankban/quicktest"
+	"github.com/google/go-cmp/cmp"
+	"github.com/matryer/is"
+	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"example.com/app/internal/testutil"
+)
+
+func TestGomega(t *testing.T) {
+	g := NewWithT(t)
+	g.Expect(Add(1, 2)).To(Equal(3))
+}
+
+func TestIs(t *testing.T) {
+	is := is.New(t)
+	is.Equal(Add(1, 2), 3)
+}
+
+func TestAssertNew(t *testing.T) {
+	a := assert.New(t)
+	a.Equal(3, Add(1, 2))
+}
+
+func TestRequireNew(t *testing.T) {
+	r := require.New(t)
+	r.NoError(Do())
+}
+
+func TestCmp(t *testing.T) {
+	if d := cmp.Diff(3, Add(1, 2)); d != "" {
+		t.Errorf("mismatch: %s", d)
+	}
+}
+
+func TestQuicktest(t *testing.T) {
+	c := qt.New(t)
+	c.Assert(Add(1, 2), qt.Equals, 3)
+}
+
+func TestCrossPkgHelper(t *testing.T) {
+	testutil.AssertEqual(t, 3, Add(1, 2))
+}
+
+func TestPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	MustDo()
+}
+
+func BenchmarkAdd(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Add(1, 2)
+	}
+}
+
+func FuzzAdd(f *testing.F) {
+	f.Fuzz(func(t *testing.T, a int) {
+		if Add(a, 0) != a {
+			t.Fatal("identity broken")
+		}
+	})
+}
+
+func ExampleAdd() {
+	fmt.Println(Add(1, 2))
+	// Output: 3
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(m.Run())
+}
+
+func TestHTTPHandlerAsserts(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/x" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	http.Get(srv.URL + "/x")
+}
+
+func TestTautSameIdent(t *testing.T) {
+	x := Add(1, 2)
+	assert.Equal(t, x, x)
+}
+
+func TestSkipFirst(t *testing.T) {
+	t.Skip("flaky")
+	assert.True(t, Do() == nil)
+}
+
+func TestSkipShort(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	assert.True(t, Do() == nil)
+}
+`)
+	units, err := adapter.LocateTests(source, "styles_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error locating tests: %v", err)
+	}
+
+	for _, u := range units {
+		if strings.HasPrefix(u.Name, "Test") {
+			if len(u.Assertions) == 0 {
+				t.Errorf("expected unit %s to have at least one assertion, got 0", u.Name)
+			}
+		}
+	}
+}
+
+func TestAC1_PackageHelperAssertion(t *testing.T) {
+	adapter := golang.NewAdapter()
+	source := []byte(`package sample_test
+
+import "testing"
+
+func TestTableWholeRowPassed(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want int
+	}{{"one", "1", 1}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkRow(t, tt)
+		})
+	}
+}
+
+func TestExternalSetupOnly(t *testing.T) {
+	setupDB(t)
+}
+
+func TestBuiltinNotHelper(t *testing.T) {
+	print(t)
+}
+`)
+	units, err := adapter.LocateTests(source, "pkg_helper_test.go")
+	if err != nil {
+		t.Fatalf("unexpected error locating tests: %v", err)
+	}
+	unitMap := make(map[string]parser.TestUnit)
+	for _, u := range units {
+		unitMap[u.Name] = u
+	}
+
+	uPassed := unitMap["TestTableWholeRowPassed"]
+	if len(uPassed.Assertions) != 1 || uPassed.Assertions[0] != "package-helper:checkRow" {
+		t.Errorf("expected [package-helper:checkRow], got %v", uPassed.Assertions)
+	}
+
+	if len(unitMap["TestExternalSetupOnly"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for setupDB(t), got %v", unitMap["TestExternalSetupOnly"].Assertions)
+	}
+	if len(unitMap["TestBuiltinNotHelper"].Assertions) != 0 {
+		t.Errorf("expected 0 assertions for print(t), got %v", unitMap["TestBuiltinNotHelper"].Assertions)
+	}
+}

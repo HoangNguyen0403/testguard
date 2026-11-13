@@ -7,9 +7,11 @@ import (
 	"go/format"
 	goparser "go/parser"
 	"go/token"
+	"math"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
@@ -26,9 +28,10 @@ var (
 	commaArg = `(?:` + strLit + `|[^,()]+?)`
 
 	// TS/JS tautology patterns
-	tsExpectSameRegex = regexp.MustCompile(`expect\s*\(\s*(` + parenArg + `)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*(` + parenArg + `)\s*\)`)
-	tsTruthyTautology = regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBeTruthy\s*\(\s*\)`)
-	tsFalsyTautology  = regexp.MustCompile(`expect\s*\(\s*false\s*\)\s*\.\s*toBeFalsy\s*\(\s*\)`)
+	tsExpectSameRegex    = regexp.MustCompile(`expect\s*\(\s*(` + parenArg + `)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*(` + parenArg + `)\s*\)`)
+	tsExpectNotSameRegex = regexp.MustCompile(`expect\s*\(\s*(` + parenArg + `)\s*\)\s*\.\s*not\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*(` + parenArg + `)\s*\)`)
+	tsTruthyTautology    = regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBeTruthy\s*\(\s*\)`)
+	tsFalsyTautology     = regexp.MustCompile(`expect\s*\(\s*false\s*\)\s*\.\s*toBeFalsy\s*\(\s*\)`)
 
 	// Dart tautology patterns
 	dartTrueIsTrue   = regexp.MustCompile(`expect\s*\(\s*true\s*,\s*isTrue\s*(?:,[^)]*)?\)`)
@@ -36,10 +39,18 @@ var (
 	dartEqualsTaut   = regexp.MustCompile(`expect\s*\(\s*(` + commaArg + `)\s*,\s*equals\s*\(\s*(` + parenArg + `)\s*\)\s*(?:,[^)]*)?\)`)
 	dartExpectSame   = regexp.MustCompile(`expect\s*\(\s*(` + commaArg + `)\s*,\s*(` + commaArg + `)\s*(?:,[^)]*)?\)`)
 
-	// Go tautology patterns
-	goTrueTautology  = regexp.MustCompile(`(?:assert|require)\.True\s*\(\s*\w+\s*,\s*true\s*(?:,[^)]*)?\)`)
-	goFalseTautology = regexp.MustCompile(`(?:assert|require)\.False\s*\(\s*\w+\s*,\s*false\s*(?:,[^)]*)?\)`)
-	goEqualSame      = regexp.MustCompile(`(?:assert|require)\.Equal(?:Values|f)?\s*\(\s*\w+\s*,\s*(` + commaArg + `)\s*,\s*(` + commaArg + `)\s*(?:,[^)]*)?\)`)
+	// Kotlin tautology patterns
+	ktAssertTrue  = regexp.MustCompile(`\bassertTrue\s*\(\s*true\s*(?:,[^)]*)?\)`)
+	ktAssertFalse = regexp.MustCompile(`\bassertFalse\s*\(\s*false\s*(?:,[^)]*)?\)`)
+	ktAssert      = regexp.MustCompile(`\bassert\s*\(\s*true\s*(?:,[^)]*)?\)`)
+	ktAssertEqual = regexp.MustCompile(`\bassertEquals\s*\(\s*(` + commaArg + `)\s*,\s*(` + commaArg + `)\s*(?:,[^)]*)?\)`)
+
+	// Swift tautology patterns
+	swiftAssertTrue  = regexp.MustCompile(`\bXCTAssertTrue\s*\(\s*true\s*(?:,[^)]*)?\)`)
+	swiftAssertFalse = regexp.MustCompile(`\bXCTAssertFalse\s*\(\s*false\s*(?:,[^)]*)?\)`)
+	swiftAssertEqual = regexp.MustCompile(`\bXCTAssertEqual\s*\(\s*(` + commaArg + `)\s*,\s*(` + commaArg + `)\s*(?:,[^)]*)?\)`)
+	swiftExpectTrue  = regexp.MustCompile(`#expect\s*\(\s*true\s*(?:,[^)]*)?\)`)
+	swiftExpectEqual = regexp.MustCompile(`#expect\s*\(\s*(` + commaArg + `)\s*==\s*(` + commaArg + `)\s*(?:,[^)]*)?\)`)
 )
 
 func isIdentPart(c byte) bool {
@@ -75,6 +86,157 @@ func isSameLiteral(l, r string) bool {
 	return isLiteral(l)
 }
 
+// isMemberAccess reports whether the token starting at pos is preceded by a member access
+// operator ('.' or '?.'), ignoring intervening whitespace and comments.
+func isMemberAccess(blanked string, pos int) bool {
+	j := pos - 1
+	for j >= 0 && (blanked[j] == ' ' || blanked[j] == '\t' || blanked[j] == '\r' || blanked[j] == '\n') {
+		j--
+	}
+	if j >= 0 && blanked[j] == '.' {
+		return true
+	}
+	return false
+}
+func isIdent(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for i := range s {
+		c := s[i]
+		if i == 0 {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$') {
+				return false
+			}
+		} else {
+			if !isIdentPart(c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isIdentOrDottedPath(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if s == "true" || s == "false" || s == "null" || s == "nil" {
+		return false
+	}
+	for _, ch := range s {
+		if ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '!' || ch == '=' || ch == ',' || ch == ';' || ch == '{' || ch == '}' {
+			return false
+		}
+	}
+	parts := strings.Split(s, ".")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if !isIdent(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeDottedPath(s string) string {
+	parts := strings.Split(s, ".")
+	for i, part := range parts {
+		parts[i] = strings.TrimSpace(part)
+	}
+	return strings.Join(parts, ".")
+}
+
+func isSameOperand(l, r string) bool {
+	if isSameLiteral(l, r) {
+		return true
+	}
+	if isIdentOrDottedPath(l) && isIdentOrDottedPath(r) {
+		return normalizeDottedPath(l) == normalizeDottedPath(r)
+	}
+	return false
+}
+
+func evalConstantArithmetic(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	expr, err := goparser.ParseExpr(s)
+	if err != nil {
+		return 0, false
+	}
+	return evalASTArithmetic(expr)
+}
+
+func evalASTArithmetic(expr ast.Expr) (float64, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind == token.INT || e.Kind == token.FLOAT {
+			v, err := strconv.ParseFloat(e.Value, 64)
+			if err != nil {
+				return 0, false
+			}
+			return v, true
+		}
+		return 0, false
+	case *ast.UnaryExpr:
+		val, ok := evalASTArithmetic(e.X)
+		if !ok {
+			return 0, false
+		}
+		if e.Op == token.SUB {
+			return -val, true
+		} else if e.Op == token.ADD {
+			return val, true
+		}
+		return 0, false
+	case *ast.BinaryExpr:
+		left, okL := evalASTArithmetic(e.X)
+		right, okR := evalASTArithmetic(e.Y)
+		if !okL || !okR {
+			return 0, false
+		}
+		switch e.Op {
+		case token.ADD:
+			return left + right, true
+		case token.SUB:
+			return left - right, true
+		case token.MUL:
+			return left * right, true
+		case token.QUO:
+			if right == 0 {
+				return 0, false
+			}
+			return left / right, true
+		case token.REM:
+			if right == 0 {
+				return 0, false
+			}
+			return float64(int64(left) % int64(right)), true
+		default:
+			return 0, false
+		}
+	case *ast.ParenExpr:
+		return evalASTArithmetic(e.X)
+	default:
+		return 0, false
+	}
+}
+
+func isConstantArithmeticTautology(l, r string) bool {
+	valL, okL := evalConstantArithmetic(l)
+	if !okL {
+		return false
+	}
+	valR, okR := evalConstantArithmetic(r)
+	if !okR {
+		return false
+	}
+	return math.Abs(valL-valR) < 1e-9
+}
+
 func isTSFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".ts" || ext == ".tsx" || ext == ".js" || ext == ".jsx" || ext == ".mjs" || ext == ".cjs"
@@ -87,13 +249,42 @@ func isDartFile(path string) bool {
 func isGoFile(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".go")
 }
+func isKotlinFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".kt" || ext == ".kts"
+}
+
+func isSwiftFile(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".swift")
+}
 
 type stringRange struct {
 	start int
 	end   int
 }
 
-func blankCommentsAndFindStrings(src string, isTS bool) (string, []stringRange) {
+// sourceLang selects the lexical rules used while blanking comments and
+// recording string ranges. The syntaxes handled here differ in whether block
+// comments nest and in how a literal embeds an interpolated expression.
+type sourceLang int
+
+const (
+	langTS sourceLang = iota
+	langDart
+	langKotlin
+	langSwift
+)
+
+// nestsBlockComments reports whether the language allows /* /* */ */ comments.
+func (l sourceLang) nestsBlockComments() bool {
+	return l == langKotlin || l == langSwift
+}
+
+// blankCommentsAndFindStrings returns src with comments replaced by spaces and
+// the byte ranges of every string literal. Positions and string contents are
+// preserved so callers can report original offsets and values while ignoring
+// text that only looks like code.
+func blankCommentsAndFindStrings(src string, lang sourceLang) (string, []stringRange) {
 	b := []byte(src)
 	n := len(b)
 	var strRanges []stringRange
@@ -112,78 +303,295 @@ func blankCommentsAndFindStrings(src string, isTS bool) (string, []stringRange) 
 			continue
 		}
 		if i+1 < n && b[i] == '/' && b[i+1] == '*' {
-			b[i] = ' '
-			b[i+1] = ' '
-			i += 2
-			for i < n {
-				if i+1 < n && b[i] == '*' && b[i+1] == '/' {
-					b[i] = ' '
-					b[i+1] = ' '
-					i += 2
-					break
+			end := findBlockCommentEnd(src, i, lang.nestsBlockComments())
+			for k := i; k < end; k++ {
+				if b[k] != '\n' && b[k] != '\r' {
+					b[k] = ' '
 				}
-				if b[i] != '\n' && b[i] != '\r' {
-					b[i] = ' '
-				}
-				i++
 			}
+			i = end
 			continue
 		}
-		if !isTS && i+2 < n && ((b[i] == '\'' && b[i+1] == '\'' && b[i+2] == '\'') || (b[i] == '"' && b[i+1] == '"' && b[i+2] == '"')) {
-			delim := b[i]
-			start := i
-			i += 3
-			for i+2 < n {
-				if b[i] == '\\' {
-					i += 2
-					continue
-				}
-				if b[i] == delim && b[i+1] == delim && b[i+2] == delim {
-					i += 3
-					break
-				}
-				i++
-			}
-			strRanges = append(strRanges, stringRange{start: start, end: i})
-			continue
-		}
-		if !isTS && (b[i] == 'r' || b[i] == 'R') && i+1 < n && (b[i+1] == '\'' || b[i+1] == '"') {
-			delim := b[i+1]
-			start := i
-			i += 2
-			for i < n && b[i] != delim && b[i] != '\n' {
-				i++
-			}
-			if i < n && b[i] == delim {
-				i++
-			}
-			strRanges = append(strRanges, stringRange{start: start, end: i})
-			continue
-		}
-		if b[i] == '\'' || b[i] == '"' || (isTS && b[i] == '`') {
-			delim := b[i]
-			start := i
-			i++
-			for i < n {
-				if b[i] == '\\' {
-					i += 2
-					continue
-				}
-				if b[i] == delim {
-					i++
-					break
-				}
-				if (delim == '\'' || delim == '"') && b[i] == '\n' {
-					break
-				}
-				i++
-			}
-			strRanges = append(strRanges, stringRange{start: start, end: i})
+		if end := scanStringLiteral(src, i, lang); end != i {
+			strRanges = append(strRanges, stringRange{start: i, end: end})
+			i = end
 			continue
 		}
 		i++
 	}
 	return string(b), strRanges
+}
+
+// findBlockCommentEnd returns the offset just past the block comment starting at
+// src[i], nesting when the language allows it. It returns len(src) when the
+// comment is unterminated.
+func findBlockCommentEnd(src string, i int, nested bool) int {
+	n := len(src)
+	j := i + 2
+	depth := 1
+	for j < n {
+		if nested && j+1 < n && src[j] == '/' && src[j+1] == '*' {
+			depth++
+			j += 2
+			continue
+		}
+		if j+1 < n && src[j] == '*' && src[j+1] == '/' {
+			depth--
+			j += 2
+			if depth == 0 {
+				return j
+			}
+			continue
+		}
+		j++
+	}
+	return n
+}
+
+// scanStringLiteral returns the offset just past the string literal starting at
+// src[i], or i when src[i] does not start one. Interpolated expressions are
+// scanned as code so a string or brace nested inside them cannot end the outer
+// literal early.
+func scanStringLiteral(src string, i int, lang sourceLang) int {
+	n := len(src)
+	if i >= n {
+		return i
+	}
+	switch lang {
+	case langTS:
+		delim := src[i]
+		if delim != '\'' && delim != '"' && delim != '`' {
+			return i
+		}
+		j := i + 1
+		for j < n {
+			if src[j] == '\\' {
+				j += 2
+				continue
+			}
+			if src[j] == delim {
+				return j + 1
+			}
+			if delim != '`' && src[j] == '\n' {
+				return j
+			}
+			j++
+		}
+		return n
+	case langDart:
+		return scanDartStringLiteral(src, i)
+	case langKotlin:
+		return scanKotlinStringLiteral(src, i)
+	case langSwift:
+		return scanSwiftStringLiteral(src, i)
+	}
+	return i
+}
+
+// scanDartStringLiteral handles single-quoted, double-quoted, triple-quoted,
+// r-prefixed raw literals, and ${…} interpolation.
+func scanDartStringLiteral(src string, i int) int {
+	n := len(src)
+	start := i
+	raw := false
+	if (src[i] == 'r' || src[i] == 'R') && i+1 < n && (src[i+1] == '\'' || src[i+1] == '"') {
+		raw = true
+		i++
+	}
+	if i >= n || (src[i] != '\'' && src[i] != '"') {
+		return start
+	}
+	delim := src[i]
+	triple := i+2 < n && src[i+1] == delim && src[i+2] == delim
+	j := i + 1
+	if triple {
+		j = i + 3
+	}
+	for j < n {
+		if !triple && src[j] == '\\' {
+			j += 2
+			continue
+		}
+		if !raw && src[j] == '$' && j+1 < n {
+			if src[j+1] == '{' {
+				j = skipInterpolatedExpression(src, j+1, langDart, '{', '}')
+				continue
+			}
+			if isIdentPart(src[j+1]) {
+				j += 2
+				for j < n && isIdentPart(src[j]) {
+					j++
+				}
+				continue
+			}
+		}
+		if triple {
+			if src[j] == delim && j+2 < n && src[j+1] == delim && src[j+2] == delim {
+				return j + 3
+			}
+		} else if src[j] == delim {
+			return j + 1
+		} else if src[j] == '\n' {
+			return j
+		}
+		j++
+	}
+	return n
+}
+
+// scanKotlinStringLiteral handles '…', "…", """…""", and ${…} interpolation.
+func scanKotlinStringLiteral(src string, i int) int {
+	n := len(src)
+	if src[i] == '\'' {
+		j := i + 1
+		for j < n {
+			if src[j] == '\\' {
+				j += 2
+				continue
+			}
+			if src[j] == '\'' {
+				return j + 1
+			}
+			if src[j] == '\n' {
+				return j
+			}
+			j++
+		}
+		return n
+	}
+	if src[i] != '"' {
+		return i
+	}
+	triple := i+2 < n && src[i+1] == '"' && src[i+2] == '"'
+	j := i + 1
+	if triple {
+		j = i + 3
+	}
+	for j < n {
+		if !triple && src[j] == '\\' {
+			j += 2
+			continue
+		}
+		if src[j] == '$' && j+1 < n {
+			if src[j+1] == '{' {
+				j = skipInterpolatedExpression(src, j+1, langKotlin, '{', '}')
+				continue
+			}
+			if isIdentPart(src[j+1]) {
+				j += 2
+				for j < n && isIdentPart(src[j]) {
+					j++
+				}
+				continue
+			}
+		}
+		if triple {
+			if src[j] == '"' && j+2 < n && src[j+1] == '"' && src[j+2] == '"' {
+				return j + 3
+			}
+		} else if src[j] == '"' {
+			return j + 1
+		} else if src[j] == '\n' {
+			return j
+		}
+		j++
+	}
+	return n
+}
+
+// scanSwiftStringLiteral handles "…", """…""", #"…"# raw literals, and \(…)
+// interpolation.
+func scanSwiftStringLiteral(src string, i int) int {
+	n := len(src)
+	if src[i] == '#' {
+		hashes := 0
+		k := i
+		for k < n && src[k] == '#' {
+			hashes++
+			k++
+		}
+		if k < n && src[k] == '"' {
+			suffix := strings.Repeat("#", hashes)
+			if k+2 < n && src[k+1] == '"' && src[k+2] == '"' {
+				idx := strings.Index(src[k+3:], `"""`+suffix)
+				if idx == -1 {
+					return n
+				}
+				return k + 3 + idx + 3 + hashes
+			}
+			idx := strings.Index(src[k+1:], `"`+suffix)
+			if idx == -1 {
+				return n
+			}
+			return k + 1 + idx + 1 + hashes
+		}
+		return i
+	}
+	if src[i] != '"' {
+		return i
+	}
+	multiline := i+2 < n && src[i+1] == '"' && src[i+2] == '"'
+	j := i + 1
+	if multiline {
+		j = i + 3
+	}
+	for j < n {
+		if src[j] == '\\' {
+			if j+1 < n && src[j+1] == '(' {
+				j = skipInterpolatedExpression(src, j+1, langSwift, '(', ')')
+				continue
+			}
+			j += 2
+			continue
+		}
+		if multiline {
+			if src[j] == '"' && j+2 < n && src[j+1] == '"' && src[j+2] == '"' {
+				return j + 3
+			}
+		} else if src[j] == '"' {
+			return j + 1
+		} else if src[j] == '\n' {
+			return j
+		}
+		j++
+	}
+	return n
+}
+
+// skipInterpolatedExpression returns the offset just past the interpolated
+// expression whose opening delimiter is src[i]. Inside the expression, strings
+// and comments are skipped so a close delimiter that belongs to them does not
+// end the interpolation.
+func skipInterpolatedExpression(src string, i int, lang sourceLang, open, close byte) int {
+	n := len(src)
+	depth := 0
+	for i < n {
+		if i+1 < n && src[i] == '/' && src[i+1] == '/' {
+			for i < n && src[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < n && src[i] == '/' && src[i+1] == '*' {
+			i = findBlockCommentEnd(src, i, lang.nestsBlockComments())
+			continue
+		}
+		if end := scanStringLiteral(src, i, lang); end != i {
+			i = end
+			continue
+		}
+		switch src[i] {
+		case open:
+			depth++
+		case close:
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+		i++
+	}
+	return n
 }
 
 func inStringRange(idx int, ranges []stringRange) bool {
@@ -228,17 +636,52 @@ func isSameGoLiteral(a, b ast.Expr) bool {
 	}
 	return false
 }
+func isSameGoIdentOrSelector(a, b ast.Expr) bool {
+	switch va := a.(type) {
+	case *ast.Ident:
+		if vb, ok := b.(*ast.Ident); ok {
+			if va.Name == "true" || va.Name == "false" || va.Name == "nil" {
+				return false
+			}
+			return va.Name == vb.Name
+		}
+	case *ast.SelectorExpr:
+		if vb, ok := b.(*ast.SelectorExpr); ok {
+			return va.Sel.Name == vb.Sel.Name && isSameGoIdentOrSelector(va.X, vb.X)
+		}
+	}
+	return false
+}
 
 type tautologyMatch struct {
 	index int
 }
 
+// bodyStartLine returns the 1-based file line that holds the first byte of
+// unit.RawBody. Adapters that publish Meta["body_start_line"] anchor statement
+// diagnostics on the original line even when the declaration spans several
+// lines; adapters without that fact fall back to the declaration line so
+// whole-test findings stay put.
+func bodyStartLine(unit parser.TestUnit) int {
+	if raw, ok := unit.Meta["body_start_line"]; ok {
+		if line, err := strconv.Atoi(raw); err == nil && line > 0 {
+			return line
+		}
+	}
+	return unit.StartLine
+}
+
+// TautologyRule reports assertions that compare a value with itself, which can
+// never fail and therefore cannot detect a regression.
 type TautologyRule struct{}
 
+// NewTautologyRule creates an evaluator for GUARD-UNIV-TAUTOLOGY.
 func NewTautologyRule() *TautologyRule {
 	return &TautologyRule{}
 }
 
+// Evaluate reports at most one GUARD-UNIV-TAUTOLOGY violation per test unit,
+// anchored on the line of the first tautological assertion found.
 func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	body := unit.RawBody
 	if strings.TrimSpace(body) == "" {
@@ -248,7 +691,7 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var matches []tautologyMatch
 
 	if isTSFile(unit.FilePath) {
-		cleanBody, strRanges := blankCommentsAndFindStrings(body, true)
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, langTS)
 		for _, loc := range tsTruthyTautology.FindAllStringIndex(cleanBody, -1) {
 			if !inStringRange(loc[0], strRanges) {
 				matches = append(matches, tautologyMatch{index: loc[0]})
@@ -263,13 +706,22 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
 				l := cleanBody[loc[2]:loc[3]]
 				r := cleanBody[loc[4]:loc[5]]
-				if isSameLiteral(l, r) {
+				if isSameOperand(l, r) || isConstantArithmeticTautology(l, r) {
+					matches = append(matches, tautologyMatch{index: loc[0]})
+				}
+			}
+		}
+		for _, loc := range tsExpectNotSameRegex.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
+				if isLiteral(l) && isLiteral(r) && !isSameLiteral(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
 		}
 	} else if isDartFile(unit.FilePath) {
-		cleanBody, strRanges := blankCommentsAndFindStrings(body, false)
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, langDart)
 		for _, loc := range dartTrueIsTrue.FindAllStringIndex(cleanBody, -1) {
 			if !inStringRange(loc[0], strRanges) {
 				matches = append(matches, tautologyMatch{index: loc[0]})
@@ -284,7 +736,7 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
 				l := cleanBody[loc[2]:loc[3]]
 				r := cleanBody[loc[4]:loc[5]]
-				if isSameLiteral(l, r) {
+				if isSameOperand(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
@@ -293,7 +745,7 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
 				l := cleanBody[loc[2]:loc[3]]
 				r := cleanBody[loc[4]:loc[5]]
-				if isSameLiteral(l, r) {
+				if isSameOperand(l, r) {
 					matches = append(matches, tautologyMatch{index: loc[0]})
 				}
 			}
@@ -351,10 +803,12 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 							goMatches = append(goMatches, int(call.Pos()))
 						}
 					}
-				case "Equal", "EqualValues", "Equalf", "EqualValuesf":
-					if len(call.Args) >= 3 {
-						if isSameGoLiteral(call.Args[1], call.Args[2]) {
-							goMatches = append(goMatches, int(call.Pos()))
+				default:
+					if strings.HasPrefix(fnName, "Equal") {
+						if len(call.Args) >= 3 {
+							if isSameGoLiteral(call.Args[1], call.Args[2]) || isSameGoIdentOrSelector(call.Args[1], call.Args[2]) {
+								goMatches = append(goMatches, int(call.Pos()))
+							}
 						}
 					}
 				}
@@ -364,7 +818,9 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 				pos := fset.Position(token.Pos(goMatches[0]))
 				line := pos.Line
 				if unit.ASTDecl == nil {
-					line = unit.StartLine + (pos.Line - 3)
+					// The synthesized wrapper places the first RawBody line at
+					// synthetic line 3.
+					line = bodyStartLine(unit) + (pos.Line - 3)
 				}
 				if line <= 0 {
 					line = unit.StartLine
@@ -383,7 +839,67 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			}
 			return nil
 		}
-		return nil
+	} else if isKotlinFile(unit.FilePath) {
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, langKotlin)
+		for _, loc := range ktAssertTrue.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range ktAssertFalse.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range ktAssert.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range ktAssertEqual.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
+				if isSameOperand(l, r) {
+					matches = append(matches, tautologyMatch{index: loc[0]})
+				}
+			}
+		}
+	} else if isSwiftFile(unit.FilePath) {
+		cleanBody, strRanges := blankCommentsAndFindStrings(body, langSwift)
+		for _, loc := range swiftAssertTrue.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range swiftAssertFalse.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range swiftExpectTrue.FindAllStringIndex(cleanBody, -1) {
+			if !inStringRange(loc[0], strRanges) {
+				matches = append(matches, tautologyMatch{index: loc[0]})
+			}
+		}
+		for _, loc := range swiftAssertEqual.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
+				if isSameOperand(l, r) {
+					matches = append(matches, tautologyMatch{index: loc[0]})
+				}
+			}
+		}
+		for _, loc := range swiftExpectEqual.FindAllStringSubmatchIndex(cleanBody, -1) {
+			if len(loc) >= 6 && !inStringRange(loc[0], strRanges) {
+				l := cleanBody[loc[2]:loc[3]]
+				r := cleanBody[loc[4]:loc[5]]
+				if isSameOperand(l, r) {
+					matches = append(matches, tautologyMatch{index: loc[0]})
+				}
+			}
+		}
 	} else {
 		return nil
 	}
@@ -397,7 +913,7 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	})
 
 	firstIndex := matches[0].index
-	line := unit.StartLine + strings.Count(body[:firstIndex], "\n")
+	line := bodyStartLine(unit) + strings.Count(body[:firstIndex], "\n")
 	if line <= 0 {
 		line = 1
 	}
@@ -415,17 +931,25 @@ func (r *TautologyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	}
 }
 
+// SkipRule reports tests that are disabled outright, which hides the behaviour
+// they were meant to protect.
 type SkipRule struct{}
 
+// NewSkipRule creates an evaluator for GUARD-UNIV-SKIP.
 func NewSkipRule() *SkipRule {
 	return &SkipRule{}
 }
 
 var (
-	tsSkipRegex  = regexp.MustCompile(`^(?:it\.skip|test\.skip|describe\.skip|xit|xtest|xdescribe)\s*\(`)
-	dartSkipTrue = regexp.MustCompile(`^skip\s*:\s*true\b`)
-	dartSkipStr  = regexp.MustCompile(`^skip\s*:\s*(?:'[^']*'|"[^"]*")`)
-	goTestFuncRe = regexp.MustCompile(`func\s+Test\w*\s*\(\s*(\w+)\s+\*testing\.T\s*\)`)
+	tsSkipDeclRegex    = regexp.MustCompile(`^(?:it\.skip|test\.skip|describe\.skip|test\.describe\.skip|xit|xtest|xdescribe|test\.fixme|it\.fixme)\s*\(`)
+	tsSkipEachRegex    = regexp.MustCompile(`^(?:it|test|describe|test\.describe)\.skip\.each\s*` + "[(`]")
+	dartSkipTrue       = regexp.MustCompile(`^skip\s*:\s*true\b`)
+	dartSkipStr        = regexp.MustCompile(`^skip\s*:\s*(?:'[^']*'|"[^"]*")`)
+	dartSkipAnnotation = regexp.MustCompile(`^@Skip\s*\(`)
+	ktSkipAnnotation   = regexp.MustCompile(`^@(?:[a-zA-Z0-9_.]+\.)?(?:Ignore|Disabled)\b`)
+	swiftFuncTestRe    = regexp.MustCompile(`\bfunc\s+(test\w*)\s*\(`)
+	swiftThrowXCTSkip  = regexp.MustCompile(`^throw\s+XCTSkip\s*\(`)
+	swiftDisabledAttr  = regexp.MustCompile(`^@Test\s*\([^)]*\.disabled\b`)
 )
 
 func (r *SkipRule) CheckFile(filePath string, src string) []models.Violation {
@@ -435,15 +959,19 @@ func (r *SkipRule) CheckFile(filePath string, src string) []models.Violation {
 		return r.checkDartSkips(filePath, src)
 	} else if isGoFile(filePath) {
 		return r.checkGoSkips(filePath, src)
+	} else if isKotlinFile(filePath) {
+		return r.checkKotlinSkips(filePath, src)
+	} else if isSwiftFile(filePath) {
+		return r.checkSwiftSkips(filePath, src)
 	}
 	return nil
 }
 
 func (r *SkipRule) checkTSSkips(filePath string, src string) []models.Violation {
 	var violations []models.Violation
+	cleanSrc, _ := blankCommentsAndFindStrings(src, langTS)
 	n := len(src)
 	line := 1
-
 	for i := 0; i < n; {
 		if src[i] == '\n' {
 			line++
@@ -500,8 +1028,8 @@ func (r *SkipRule) checkTSSkips(filePath string, src string) []models.Violation 
 		}
 
 		// Check for TS/JS skip pattern
-		if i == 0 || !isIdentPart(src[i-1]) {
-			if match := tsSkipRegex.FindString(src[i:]); match != "" {
+		if (i == 0 || !isIdentPart(src[i-1])) && !isMemberAccess(cleanSrc, i) {
+			if match := tsSkipEachRegex.FindString(src[i:]); match != "" {
 				snippet := strings.TrimSpace(match)
 				violations = append(violations, models.Violation{
 					RuleID:     "GUARD-UNIV-SKIP",
@@ -514,6 +1042,24 @@ func (r *SkipRule) checkTSSkips(filePath string, src string) []models.Violation 
 				})
 				i += len(match)
 				continue
+			}
+			if match := tsSkipDeclRegex.FindString(src[i:]); match != "" {
+				rem := src[i+len(match):]
+				trimmed := strings.TrimLeft(rem, " \t\r\n")
+				if len(trimmed) > 0 && (trimmed[0] == '\'' || trimmed[0] == '"' || trimmed[0] == '`') {
+					snippet := strings.TrimSpace(match)
+					violations = append(violations, models.Violation{
+						RuleID:     "GUARD-UNIV-SKIP",
+						Severity:   models.SeverityWarning,
+						FilePath:   filePath,
+						LineNumber: line,
+						Column:     1,
+						Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", snippet),
+						Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+					})
+					i += len(match)
+					continue
+				}
 			}
 		}
 
@@ -560,7 +1106,7 @@ var dartSkipCallNames = map[string]bool{
 
 func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violation {
 	var violations []models.Violation
-	cleanSrc, _ := blankCommentsAndFindStrings(src, false)
+	cleanSrc, strRanges := blankCommentsAndFindStrings(src, langDart)
 	n := len(cleanSrc)
 	line := 1
 
@@ -576,8 +1122,21 @@ func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violatio
 			continue
 		}
 
-		if i == 0 || !isIdentPart(cleanSrc[i-1]) {
-			rem := src[i:]
+		if (i == 0 || !isIdentPart(cleanSrc[i-1])) && !inStringRange(i, strRanges) {
+			rem := cleanSrc[i:]
+			if match := dartSkipAnnotation.FindString(rem); match != "" {
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-UNIV-SKIP",
+					Severity:   models.SeverityWarning,
+					FilePath:   filePath,
+					LineNumber: line,
+					Column:     1,
+					Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", "@Skip(...)"),
+					Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+				})
+				i += len(match)
+				continue
+			}
 			var snippet string
 			if match := dartSkipTrue.FindString(rem); match != "" {
 				snippet = strings.TrimSpace(match)
@@ -605,6 +1164,116 @@ func (r *SkipRule) checkDartSkips(filePath string, src string) []models.Violatio
 
 		i++
 	}
+
+	return violations
+}
+func (r *SkipRule) checkKotlinSkips(filePath string, src string) []models.Violation {
+	var violations []models.Violation
+	cleanSrc, strRanges := blankCommentsAndFindStrings(src, langKotlin)
+	n := len(cleanSrc)
+	line := 1
+
+	for i := 0; i < n; {
+		if src[i] == '\n' {
+			line++
+			i++
+			continue
+		}
+
+		if cleanSrc[i] == ' ' || cleanSrc[i] == '\t' || cleanSrc[i] == '\r' {
+			i++
+			continue
+		}
+
+		if (i == 0 || !isIdentPart(cleanSrc[i-1])) && !inStringRange(i, strRanges) {
+			if match := ktSkipAnnotation.FindString(cleanSrc[i:]); match != "" {
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-UNIV-SKIP",
+					Severity:   models.SeverityWarning,
+					FilePath:   filePath,
+					LineNumber: line,
+					Column:     1,
+					Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", match),
+					Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+				})
+				i += len(match)
+				continue
+			}
+		}
+
+		i++
+	}
+
+	return violations
+}
+
+func (r *SkipRule) checkSwiftSkips(filePath string, src string) []models.Violation {
+	var violations []models.Violation
+	cleanSrc, strRanges := blankCommentsAndFindStrings(src, langSwift)
+	n := len(cleanSrc)
+	line := 1
+
+	for i := 0; i < n; {
+		if src[i] == '\n' {
+			line++
+			i++
+			continue
+		}
+
+		if cleanSrc[i] == ' ' || cleanSrc[i] == '\t' || cleanSrc[i] == '\r' {
+			i++
+			continue
+		}
+
+		if !inStringRange(i, strRanges) {
+			if match := swiftDisabledAttr.FindString(cleanSrc[i:]); match != "" {
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-UNIV-SKIP",
+					Severity:   models.SeverityWarning,
+					FilePath:   filePath,
+					LineNumber: line,
+					Column:     1,
+					Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", "@Test(.disabled)"),
+					Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+				})
+				i += len(match)
+				continue
+			}
+
+			if loc := swiftFuncTestRe.FindStringIndex(cleanSrc[i:]); loc != nil && loc[0] == 0 {
+				bracePos := strings.IndexByte(cleanSrc[i+loc[1]:], '{')
+				if bracePos != -1 {
+					bodyStart := i + loc[1] + bracePos + 1
+					j := bodyStart
+					for j < n && (cleanSrc[j] == ' ' || cleanSrc[j] == '\t' || cleanSrc[j] == '\r' || cleanSrc[j] == '\n') {
+						j++
+					}
+					if j < n && !inStringRange(j, strRanges) {
+						if match := swiftThrowXCTSkip.FindString(cleanSrc[j:]); match != "" {
+							stmtLine := 1 + strings.Count(src[:j], "\n")
+							violations = append(violations, models.Violation{
+								RuleID:     "GUARD-UNIV-SKIP",
+								Severity:   models.SeverityWarning,
+								FilePath:   filePath,
+								LineNumber: stmtLine,
+								Column:     1,
+								Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", "throw XCTSkip(...)"),
+								Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+							})
+						}
+					}
+				}
+				i += loc[1]
+				continue
+			}
+		}
+
+		i++
+	}
+
+	sort.Slice(violations, func(i, j int) bool {
+		return violations[i].LineNumber < violations[j].LineNumber
+	})
 
 	return violations
 }
