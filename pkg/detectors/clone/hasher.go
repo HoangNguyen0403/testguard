@@ -359,112 +359,121 @@ type analyzedUnit struct {
 }
 
 // Check compares test units within the same file for duplicate execution bodies.
+// Units are only compared against other units with equal Scope.
 func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 	var violations []models.Violation
-	byHash := make(map[string][]analyzedUnit)
 
+	// Partition units by Scope so tests in different scopes (e.g. describe blocks
+	// with different setup/fixtures) are never compared against each other.
+	byScope := make(map[string][]parser.TestUnit)
+	var scopes []string
 	for _, unit := range units {
-		if unit.Kind == "file" {
-			continue
+		if _, ok := byScope[unit.Scope]; !ok {
+			scopes = append(scopes, unit.Scope)
 		}
-		body := strings.TrimSpace(unit.RawBody)
-		if body == "" {
-			continue
-		}
-		tokens := tokensForCode(body, unit.FilePath)
-		if meaningfulTokenCount(tokens) < 3 {
-			continue
-		}
-		h := hashTokens(tokens)
-		byHash[h] = append(byHash[h], analyzedUnit{unit: unit, tokens: tokens})
+		byScope[unit.Scope] = append(byScope[unit.Scope], unit)
 	}
+	sort.Strings(scopes)
 
-	hashes := make([]string, 0, len(byHash))
-	for h := range byHash {
-		hashes = append(hashes, h)
-	}
-	sort.Strings(hashes)
+	for _, scope := range scopes {
+		scopeUnits := byScope[scope]
+		byHash := make(map[string][]analyzedUnit)
 
-	for _, h := range hashes {
-		group := byHash[h]
-		if len(group) < 2 {
-			continue
+		for _, unit := range scopeUnits {
+			if unit.Kind == "file" {
+				continue
+			}
+			body := strings.TrimSpace(unit.RawBody)
+			if body == "" {
+				continue
+			}
+			tokens := tokensForCode(body, unit.FilePath)
+			if meaningfulTokenCount(tokens) < 3 {
+				continue
+			}
+			h := hashTokens(tokens)
+			byHash[h] = append(byHash[h], analyzedUnit{unit: unit, tokens: tokens})
 		}
 
-		// 1. Partition the group into exact-token subgroups.
-		var exactSubgroups [][]analyzedUnit
-		for _, u := range group {
-			found := false
-			for i := range exactSubgroups {
-				if isExactTokens(exactSubgroups[i][0].tokens, u.tokens) {
-					exactSubgroups[i] = append(exactSubgroups[i], u)
-					found = true
-					break
+		hashes := make([]string, 0, len(byHash))
+		for h := range byHash {
+			hashes = append(hashes, h)
+		}
+		sort.Strings(hashes)
+
+		for _, h := range hashes {
+			group := byHash[h]
+			if len(group) < 2 {
+				continue
+			}
+
+			// 1. Partition the group into exact-token subgroups.
+			var exactSubgroups [][]analyzedUnit
+			for _, u := range group {
+				found := false
+				for i := range exactSubgroups {
+					if isExactTokens(exactSubgroups[i][0].tokens, u.tokens) {
+						exactSubgroups[i] = append(exactSubgroups[i], u)
+						found = true
+						break
+					}
+				}
+				if !found {
+					exactSubgroups = append(exactSubgroups, []analyzedUnit{u})
 				}
 			}
-			if !found {
-				exactSubgroups = append(exactSubgroups, []analyzedUnit{u})
+
+			var groupViolations []models.Violation
+
+			// 2. For each exact subgroup of size >= 2, emit GUARD-UNIV-01 Duplicate test body for every member after the first.
+			// Severity is Warning per AC4.
+			for _, subgroup := range exactSubgroups {
+				if len(subgroup) >= 2 {
+					first := subgroup[0]
+					for j := 1; j < len(subgroup); j++ {
+						member := subgroup[j]
+						groupViolations = append(groupViolations, models.Violation{
+							RuleID:     "GUARD-UNIV-01",
+							Severity:   models.SeverityWarning,
+							FilePath:   member.unit.FilePath,
+							LineNumber: member.unit.StartLine,
+							Column:     1,
+							Message:    fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", member.unit.Name, first.unit.Name, first.unit.StartLine),
+							Suggestion: "Consolidate identical duplicate tests or verify whether distinct inputs were intended.",
+						})
+					}
+				}
 			}
-		}
 
-		var groupViolations []models.Violation
-
-		// 2. For each exact subgroup of size >= 2, emit GUARD-UNIV-01 Duplicate test body for every member after the first.
-		for _, subgroup := range exactSubgroups {
-			if len(subgroup) >= 2 {
-				first := subgroup[0]
-				for j := 1; j < len(subgroup); j++ {
-					member := subgroup[j]
+			// 3. For 4 or more literal variants in one scope, emit GUARD-UNIV-02 Advisory.
+			// 2-3 literal variants ("Similar test structure") are intentionally omitted per AC4.
+			numVariants := len(exactSubgroups)
+			firstUnit := group[0]
+			if numVariants >= 4 {
+				for i := 3; i < numVariants; i++ {
+					variantRep := exactSubgroups[i][0]
 					groupViolations = append(groupViolations, models.Violation{
-						RuleID:     "GUARD-UNIV-01",
+						RuleID:     "GUARD-UNIV-02",
 						Severity:   models.SeverityAdvisory,
-						FilePath:   member.unit.FilePath,
-						LineNumber: member.unit.StartLine,
+						FilePath:   variantRep.unit.FilePath,
+						LineNumber: variantRep.unit.StartLine,
 						Column:     1,
-						Message:    fmt.Sprintf("Duplicate test body: '%s' has identical execution tokens to '%s' (line %d).", member.unit.Name, first.unit.Name, first.unit.StartLine),
-						Suggestion: "Consolidate identical duplicate tests or verify whether distinct inputs were intended.",
+						Message:    fmt.Sprintf("Structural repetition: '%s' shares normalized token structure with %d other tests in this file (first seen at '%s', line %d). Note: structural similarity does not prove semantic redundancy.", variantRep.unit.Name, len(group)-1, firstUnit.unit.Name, firstUnit.unit.StartLine),
+						Suggestion: "Consolidate repetitive test structures into a parameterized table-driven test loop without removing valid boundary conditions or distinct equivalence classes.",
 					})
 				}
 			}
-		}
 
-		// 3. Members of the normalized group that are NOT exact duplicates of anything.
-		// Count only distinct exact-variants: len(exactSubgroups).
-		numVariants := len(exactSubgroups)
-		firstUnit := group[0]
-		if numVariants >= 2 && numVariants <= 3 {
-			for i := 1; i < numVariants; i++ {
-				variantRep := exactSubgroups[i][0]
-				groupViolations = append(groupViolations, models.Violation{
-					RuleID:     "GUARD-UNIV-01",
-					Severity:   models.SeverityAdvisory,
-					FilePath:   variantRep.unit.FilePath,
-					LineNumber: variantRep.unit.StartLine,
-					Column:     1,
-					Message:    fmt.Sprintf("Similar test structure: '%s' shares normalized token structure with '%s' (line %d). Note: literal normalization indicates structural similarity, not proven semantic redundancy.", variantRep.unit.Name, firstUnit.unit.Name, firstUnit.unit.StartLine),
-					Suggestion: "Check whether this test exercises a distinct edge case or boundary condition before consolidating. Do not treat syntactic clone similarity as proof of semantic redundancy or delete cases.",
-				})
-			}
-		} else if numVariants >= 4 {
-			for i := 3; i < numVariants; i++ {
-				variantRep := exactSubgroups[i][0]
-				groupViolations = append(groupViolations, models.Violation{
-					RuleID:     "GUARD-UNIV-02",
-					Severity:   models.SeverityAdvisory,
-					FilePath:   variantRep.unit.FilePath,
-					LineNumber: variantRep.unit.StartLine,
-					Column:     1,
-					Message:    fmt.Sprintf("Structural repetition: '%s' shares normalized token structure with %d other tests in this file (first seen at '%s', line %d). Note: structural similarity does not prove semantic redundancy.", variantRep.unit.Name, len(group)-1, firstUnit.unit.Name, firstUnit.unit.StartLine),
-					Suggestion: "Consolidate repetitive test structures into a parameterized table-driven test loop without removing valid boundary conditions or distinct equivalence classes.",
-				})
-			}
+			violations = append(violations, groupViolations...)
 		}
-
-		sort.Slice(groupViolations, func(i, j int) bool {
-			return groupViolations[i].LineNumber < groupViolations[j].LineNumber
-		})
-		violations = append(violations, groupViolations...)
 	}
+
+	sort.Slice(violations, func(i, j int) bool {
+		if violations[i].LineNumber != violations[j].LineNumber {
+			return violations[i].LineNumber < violations[j].LineNumber
+		}
+		return violations[i].Message < violations[j].Message
+	})
 
 	return violations
 }

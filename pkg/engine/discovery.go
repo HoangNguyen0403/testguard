@@ -85,34 +85,66 @@ func isLinkedGitWorktree(dir string) bool {
 	return strings.HasPrefix(content, "gitdir:") && strings.Contains(content, "/worktrees/")
 }
 
+// isGeneratedByAdapter reports whether the adapter that owns a file's extension
+// considers it generated. Discovery therefore needs no language switch and no
+// adapter can be skipped silently: an extension with no owner is never a
+// candidate because isSupportedLanguageExtension rejects it first.
+func isGeneratedByAdapter(adapters []parser.LanguageAdapter, filePath string, header []byte) bool {
+	ext := strings.ToLower(filepath.Ext(filePath))
+	for _, adapter := range adapters {
+		for _, declared := range adapter.FileExtensions() {
+			if ext == declared {
+				return adapter.IsGenerated(filePath, header)
+			}
+		}
+	}
+	return false
+}
+
+var (
+	// testFileInfixes are the dot-delimited role markers that precede a test
+	// file's extension (foo.test.ts, login.cy.ts, flow.e2e-spec.ts).
+	testFileInfixes = []string{".test", ".spec", ".cy", ".e2e", ".e2e-spec"}
+
+	// testFileExtensions are the script extensions that may follow an infix.
+	testFileExtensions = []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"}
+)
+
 // isTestFileName checks if a file name matches any supported test naming convention.
 func isTestFileName(name string) bool {
 	lower := strings.ToLower(name)
-	return strings.HasSuffix(lower, "_test.dart") ||
-		strings.HasSuffix(lower, "_test.go") ||
-		strings.HasSuffix(lower, ".test.ts") ||
-		strings.HasSuffix(lower, ".test.tsx") ||
-		strings.HasSuffix(lower, ".spec.ts") ||
-		strings.HasSuffix(lower, ".spec.tsx") ||
-		strings.HasSuffix(lower, ".test.js") ||
-		strings.HasSuffix(lower, ".test.jsx") ||
-		strings.HasSuffix(lower, ".spec.js") ||
-		strings.HasSuffix(lower, ".spec.jsx") ||
-		strings.HasSuffix(lower, "test.kt") ||
-		strings.HasSuffix(lower, "tests.kt") ||
-		strings.HasSuffix(lower, "test.swift") ||
-		strings.HasSuffix(lower, "tests.swift")
+	if strings.HasSuffix(lower, "_test.dart") || strings.HasSuffix(lower, "_test.go") {
+		return true
+	}
+	if strings.HasSuffix(lower, "test.kt") || strings.HasSuffix(lower, "tests.kt") {
+		return true
+	}
+	if strings.HasSuffix(lower, "test.swift") || strings.HasSuffix(lower, "tests.swift") {
+		return true
+	}
+	for _, infix := range testFileInfixes {
+		for _, ext := range testFileExtensions {
+			if strings.HasSuffix(lower, infix+ext) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isSupportedLanguageExtension returns true if the extension belongs to a supported language.
 func isSupportedLanguageExtension(ext string) bool {
 	lower := strings.ToLower(ext)
 	switch lower {
-	case ".dart", ".go", ".ts", ".tsx", ".js", ".jsx", ".kt", ".swift":
+	case ".dart", ".go", ".kt", ".swift":
 		return true
-	default:
-		return false
 	}
+	for _, supported := range testFileExtensions {
+		if lower == supported {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizePath converts a path to a canonical cwd-relative slash path.
@@ -152,7 +184,8 @@ type DiscoveryResult struct {
 }
 
 // DiscoverScope inspects target paths and resolves candidates, exclusions, and unsupported inputs.
-func DiscoverScope(paths []string, adapter parser.LanguageAdapter, failTraversal func(path string) error) *DiscoveryResult {
+// The adapter list supplies the per-language generated-file policy.
+func DiscoverScope(paths []string, adapters []parser.LanguageAdapter, failTraversal func(path string) error) *DiscoveryResult {
 	result := &DiscoveryResult{
 		CandidateFiles: make([]string, 0),
 		Excluded:       make([]models.ExcludedPath, 0),
@@ -226,7 +259,7 @@ func DiscoverScope(paths []string, adapter parser.LanguageAdapter, failTraversal
 					_, _ = f.Read(header)
 					f.Close()
 				}
-				if adapter.IsGenerated(trimmed, header) {
+				if isGeneratedByAdapter(adapters, trimmed, header) {
 					norm := normalizePath(trimmed)
 					if !excludedMap[norm] {
 						excludedMap[norm] = true
@@ -296,7 +329,7 @@ func DiscoverScope(paths []string, adapter parser.LanguageAdapter, failTraversal
 						_, _ = f.Read(header)
 						f.Close()
 					}
-					if adapter.IsGenerated(path, header) {
+					if isGeneratedByAdapter(adapters, path, header) {
 						norm := normalizePath(path)
 						if !excludedMap[norm] {
 							excludedMap[norm] = true

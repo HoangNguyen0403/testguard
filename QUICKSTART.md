@@ -10,7 +10,7 @@ This quickstart covers installing the standalone `testguard` CLI on macOS, Linux
 
 Make sure you have:
 * A terminal or command prompt open.
-* A code project containing unit tests (**Dart/Flutter**, **Go**, or **TypeScript/JavaScript**).
+* A code project containing unit tests (**Dart/Flutter**, **Go**, **TypeScript/JavaScript**, **Kotlin**, or **Swift**).
 * *Note: TestGuard is 100% standalone and requires zero external runtimes or skill configurations.*
 
 ---
@@ -66,6 +66,8 @@ testguard
 ```
 
 TestGuard automatically detects your project types (`pubspec.yaml`, `go.mod`, `package.json`) and runs all matching guardrails with **zero configuration**:
+
+Recognized test file names: `*_test.dart`, `*_test.go`, `*Test.kt`/`*Tests.kt`, `*Test.swift`/`*Tests.swift`, and script files ending in `.test.<ext>` or `.spec.<ext>` where `<ext>` is one of `ts tsx js jsx mjs cjs mts cts`, plus Cypress `*.cy.ts`/`*.cy.js` and Playwright `*.e2e.ts`/`*.e2e.tsx`/`*.e2e.js`/`*.e2e-spec.ts`.
 
 ```text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -341,5 +343,6 @@ exit "$scan_exit"
 ## Heuristic Limits & Production Assurance Boundary
 
 - **Static Pattern Matching**: TestGuard uses static AST token analysis and pattern recognition. It does **not** execute test suites or run dynamic mutation testing.
+- **Documented Recall Gaps**: Constructs the engine deliberately does not report — cross-file assertion helpers, hollow tests hidden behind unreferenced nested-function assertions, BLoC shapes outside the modelled subset, and the adapter lexical boundaries — are listed in `ARCHITECTURE.md` §8. An empty findings array only means "nothing matched", never "the tests are effective".
 - **No Production Assurance Claims**: TestGuard does not certify that tests kill production bugs or satisfy behavioral correctness.
 - **Unreleased Contract Boundary**: The v0.1.4 JSON envelope, exit code precedence, and `--allow-empty` boundary represent an unreleased specification. Do not claim published or released status.

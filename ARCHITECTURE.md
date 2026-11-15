@@ -19,10 +19,15 @@ This document outlines the architectural boundaries, package structure, executio
 
 ```
 cmd/testguard/               # CLI Entrypoint, Cobra commands, flag parsing, reporter wiring
-  └── pkg/engine/            # Orchestrator: discovery, AST delegation, rule evaluation, suppression
-        ├── pkg/parser/      # AST parsing contracts and language-specific adapters (e.g. Dart)
+  └── pkg/engine/            # Orchestrator: discovery, adapter dispatch, rule evaluation, suppression
+        ├── pkg/parser/      # LanguageAdapter contract plus per-language adapters
+        │     ├── dart/      # flutter_test, blocTest
+        │     ├── golang/    # testing, testify, gomock, gomega, quicktest
+        │     ├── typescript/# jest/vitest, JSX-aware lexer
+        │     ├── kotlin/    # JUnit, kotest, MockK
+        │     └── swift/     # XCTest, Swift Testing
         ├── pkg/detectors/   # Universal, language-agnostic detectors (clone, naming, zeroassert)
-        ├── pkg/rules/       # Polyglot domain & framework rules (dart, golang, typescript, mobile)
+        ├── pkg/rules/       # Polyglot domain & framework rules (dart, golang, typescript, mobile, hygiene, e2e)
         └── pkg/models/      # Pure domain models (Violation, Severity, Suppression) [Leaf package]
 
 pkg/reporter/                # Presentation: Terminal scorecard, Azure PR logger, JSON, Progress spinner
@@ -36,9 +41,9 @@ pkg/updater/                 # Self-updating mechanism via GitHub Releases API
 |---|---|---|
 | `cmd/testguard` | CLI commands (`explain`, `rules`, `update`), flags, wiring reporters to engine. | Coordinates I/O; never contains AST parsing or rule logic. |
 | `pkg/engine` | Directory traversal (`FindTestFiles`), module identification, rule dispatch, suppression filtering. | Must remain headless; accepts `Options.ProgressFn` for event emission. |
-| `pkg/parser` | Defines `LanguageAdapter` interface and `TestUnit` AST representations. | Implementations must handle malformed syntax without crashing. |
+| `pkg/parser` | Defines `LanguageAdapter` interface and `TestUnit` AST representations, plus one adapter per supported language. | Implementations must handle malformed syntax without crashing. Every discovered test file is parsed by the adapter that claims its extension; a `LocateTests` error is reported as `parse_failed`. |
 | `pkg/detectors` | Language-agnostic smells: test cloning (`clone`), vague naming (`naming`), missing assertions (`zeroassert`). | Operates on generic token streams or `TestUnit` abstractions. |
-| `pkg/rules` | Language- and framework-specific rules: Flutter BLoC, Go Clean Architecture ports, React timers, NestJS. | Grouped by language (`rules/dart`, `rules/golang`, `rules/typescript`, `rules/mobile`). |
+| `pkg/rules` | Language- and framework-specific rules: Flutter BLoC, Go Clean Architecture and table tests, TypeScript/NestJS/React oracles, Kotlin coroutine and MockK provenance, Swift timeouts, plus shared hygiene and E2E rules. | Grouped by concern (`rules/dart`, `rules/golang`, `rules/typescript`, `rules/mobile`, `rules/hygiene`, `rules/e2e`). |
 | `pkg/models` | Core data structures: `Violation`, `Severity`, `Suppression`, `ScanReport`. | Pure leaf package. **Must never import other `pkg/` packages**. |
 | `pkg/reporter` | Output rendering: `TerminalReporter`, `AzureReporter`, `JSONReport`, `ProgressReporter`. | Handles TTY detection, `NO_COLOR`, and line clearing (`\r\033[2K`). |
 | `pkg/docs` | Built-in rule explainers (`Explain()`, `AllRules()`). | Must keep descriptions, remediation steps, and code examples synchronized with rules. |
@@ -112,14 +117,17 @@ TestGuard provides live visual progress during both discovery and scanning witho
    type MyNewRule struct {}
    func (r *MyNewRule) Evaluate(unit parser.TestUnit) []models.Violation { ... }
    ```
+   File-level rules instead expose `EvaluateFile(filePath string, src string, units []parser.TestUnit)`.
 3. **Register in `pkg/engine/engine.go`**:
    - Add rule field to `Engine` struct.
    - Initialize in `New()`.
-   - Call during the language dispatch loop in `Run()`.
+   - Call during the language dispatch loop in `Run()`, keyed on `adapter.ID()`.
 4. **Register in `pkg/docs/embedded.go`**:
    - Add rule metadata, rationale, remediation, and good/bad code examples to the embedded catalog so `testguard explain <rule>` works out of the box.
+   - Set `Severity` to the exact severity the engine emits and `Languages` to every language the rule can fire in; the corpus parity test fails when either drifts.
 5. **Add Comprehensive Tests**:
    - Unit tests covering positive match (violation triggered), negative match (valid code passes), and edge cases.
+   - One **positive** and one **negative** corpus fixture under `pkg/engine/testdata/corpus/<prefix>_<scenario>/`, registered in `pkg/engine/corpus_test.go` with its exact expected findings. The corpus test fails on any false positive, false negative, severity mismatch, catalog rule without a true positive, or a catalog language without a true positive.
 
 ### Recipe B: Adding a New Language Adapter
 1. Create `pkg/parser/<language>/adapter.go`.
@@ -132,7 +140,8 @@ TestGuard provides live visual progress during both discovery and scanning witho
        IsGenerated(filePath string, header []byte) bool
    }
    ```
-4. Add the adapter to `pkg/engine/engine.go` and hook into the file loop.
+3. Register the adapter in `Engine.adapters` (`pkg/engine/engine.go`) and extend `isTestFileName` / `isSupportedLanguageExtension` in `pkg/engine/discovery.go` for its naming conventions.
+4. Add its extension to `detectLanguageFromExt` in `pkg/engine/corpus_test.go` and to the `Languages` of every rule it can emit.
 
 ---
 
@@ -217,6 +226,87 @@ type ScanReport = {
 TestGuard operates exclusively as a static AST token and syntax analyzer.
 - It **does not execute** test suites, measure dynamic code coverage, run dynamic mutation engines, or evaluate test execution oracles.
 - It **cannot prove** that a test suite detects real runtime faults or provides production assurance.
+
+### Known Recall Limits (Documented Misses)
+Precision comes first: when a construct cannot be classified safely the engine reports nothing, so the
+absences below are deliberate, reviewed misses rather than guarantees.
+- **Cross-file resolution is absent.** Assertion helpers are credited one hop within the same file only
+  (with the documented Go external-factory and `t.Run` delegation exceptions). Helpers imported from another
+  module, a `GUARD-KT-02` dispatcher configured in a base class in another file, and a
+  `GUARD-GO-UNCHECKED-WANT` row type declared in another file are all invisible.
+- **Naming-convention credit is heuristic.** Where the adapter credits a helper by its name
+  (`assert*`/`expect*`/`verify*`), a same-named helper that does not assert would suppress a genuine
+  zero-assertion finding. This is a miss, never a manufactured finding.
+- **Assertion-helper resolution is block-scoped and one hop.** A helper declared inside one `describe` block
+  is not credited from a sibling block, and a locally shadowed `expect` is not treated as an assertion.
+  Assertions inside nested functions are credited lexically regardless of references (see below). Helpers
+  whose name matches `assert*`/`expect*`/`verify*` are credited file-wide, and imported helpers are credited
+  only through those naming conventions.
+- **TypeScript/JavaScript declarations are expression-tolerant, evaluation-free.** `it`/`test`/`fit`/
+  `specify` declare a test when the title argument is a string/backtick literal, an identifier, a member
+  expression (`c.name`), a call expression, a concatenation, or a template literal, and a function literal
+  (`=>` or `function`) is supplied as the callback (second argument, or last after an options object/timeout).
+  Local/shadowed `test`/`fit` functions, a `fit` utility bound by
+  `import`/`require`, unknown members (`test.foo(...)`), hooks, `test.use`, `test.setTimeout` and
+  function/method declarations are not tests; Playwright `test.fail('title', fn)` is not discovered
+  (`it.fails` is). Dynamic titles are recorded as the original expression source, never an invented
+  evaluated value: `analyzed_tests` counts declaration sites, so one `it(title, …)` inside a `forEach`/`for`
+  loop is one unit regardless of runtime case count. Generic JSX elements with a balanced type-argument list
+  before their attributes (`<Table<{ n: number }> … />`) are parsed; a genuinely malformed generic element
+  still fails closed. Structural validation balances `()[]{}` only — `<`/`>` generics are not
+  balance-checked outside JSX tags — and a regex literal containing braces or a backtick inside a template
+  interpolation fails closed rather than truncating silently. Playwright implicit waits (`page.waitForURL`,
+  `waitForSelector`, `waitForResponse`) are not credited as assertions, so a test whose only verification is
+  such a wait is reported as zero-assertion.
+- **Nested-function assertions are credited lexically, with no execution-reachability guarantee.** An
+  assertion textually inside a nested function counts as verification for its test whether the function is
+  invoked by name, passed as a callback, passed by reference, aliased, used as a promise executor, rendered
+  as a JSX tag, or never referenced at all. Static lexical inspection cannot prove whether a framework or
+  deferred call invokes a function, so TestGuard does not infer reachability. Recall gap: a genuinely
+  unreferenced nested function containing assertions can hide a hollow test, and typed-return or generic
+  recursive-only helpers are equally invisible; TestGuard does not claim to catch that shape. A nested
+  function without any recognized assertion, and a shadowed `expect`, still produce zero-assertion findings.
+- **`GUARD-UNIV-FOCUS` follows literal-title `fit` only.** A dynamic `fit(name, fn)` call (for example inside
+  a `forEach`) is discovered as one analysable test but does not receive the focus warning. Minor recall gap,
+  deliberately not expanded in this pass.
+- **Dart arrow-body tests are not discovered.** A declaration such as `test('x', () => expect(add(1, 2), 3));`
+  or a hollow `test('y', () => add(1, 2));` produces no unit, so its assertions are never inspected and no
+  diagnostic is emitted; the rest of the file is still analysed and may report `complete`. This is a
+  pre-existing discovery limit, not fixed in the current correction pass.
+- **`GUARD-UNIV-TAUTOLOGY` inspects assert/require selectors in Go.** A bare `if got != got` comparison is
+  not reported. Dart literal operands are compared as plain literals; Kotlin/Swift member paths follow the
+  same-operand comparison with no invocation, so `a.id` versus `b.id` is not a tautology.
+- **`GUARD-TS-CONDITIONAL-ASSERT` is lexical, not a control-flow analysis.** A branch is total when it
+  asserts or ends in a statement-level `throw`, `fail(`, `expect.fail(`, `assert.fail(` or
+  `expect.unreachable(`. A failure nested in an inner conditional, `try` body, call argument or function body
+  does not totalise the enclosing branch, so behaviourally equivalent shapes stay reported (a miss).
+- **Dart BLoC rules model the common shapes only.**
+  `GUARD-UNIV-ZERO` never fires on `blocTest` units (a `blocTest` without `expect`, `verify` or `errors` is
+  not reported). `GUARD-DART-SEED-ECHO` models `.having(...)` fields; a scalar seed (`seed: () => 4` with
+  `expect: () => [4]`) or a whole-state echo is not reported. `GUARD-DART-MOCK-ECHO` requires a
+  `Right`/`Left` result wrapper, so a direct echo or an unwrapped use case is not reported. Error
+  pass-through combined with `verify(...).called(1)` is reported as a mock echo and may be a valid
+  delegation test on review.
+- **`GUARD-KT-01` requires a property/accessor read of the stubbed member.** A direct stub-call echo such as
+  `assertEquals("alice", repo.find("a"))` is not reported.
+- **`GUARD-GO-01` recognises `github.com/golang/mock/gomock`, `testify/mock` and generated `/mocks`
+  packages.** It does not recognise the `go.uber.org/mock/gomock` re-module path, so a mock controller
+  imported from that path is not reported even though the Go adapter can parse it.
+- **The Kotlin/Swift/Dart/TypeScript adapters are lexical scanners, not full language parsers.** Unbalanced
+  delimiters or an unterminated string/template/comment are reported as an adapter error only where the
+  adapter has an error path; otherwise they degrade to a smaller discovery set rather than a claim of a
+  complete scan. Comments, raw strings, triple-quoted strings and nested interpolation are masked before
+  discovery, but a construct outside that lexical model is not guaranteed to be understood. Specific
+  boundaries: Kotlin/Swift validate comments, literals and `()[]{}` only (angle-bracket generics are not
+  balanced, and a Swift bare regex literal is not recognised, so an unbalanced brace inside one is read as
+  code); Kotlin bare `check(cond) { … }` counts as an assertion because it throws on a false predicate, while
+  `require(...)` is not credited; Swift `@Test`-attributed functions may take parameters, XCTest
+  `func test…(params)` methods are not tests.
+
+### Measured Scan Cost
+Single-file TypeScript scans grow quadratically in the number of tests because each unit re-scans its token
+stream. Measured on the reviewer machine (seconds per file): 2,500 tests ≈ 0.3 s, 5,000 ≈ 0.8 s,
+10,000 ≈ 2.7 s, 20,000 ≈ 13 s. Realistic suites are far below this; no linear-scaling claim is made.
 
 ### Observation-First Adoption & Rollback Architecture
 - **Observation-First Rollout**: Integrations in CI pipelines should run in observation-only mode (`continue-on-error: true` or non-blocking PR annotations) during baseline collection and rule calibration.

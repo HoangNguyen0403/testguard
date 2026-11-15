@@ -7,8 +7,11 @@ import (
 	"go/format"
 	goparser "go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
@@ -32,7 +35,7 @@ func getUnitAST(unit parser.TestUnit) (*token.FileSet, *ast.FuncDecl, error) {
 	fset := token.NewFileSet()
 	var src string
 
-	if strings.HasPrefix(raw, "func ") {
+	if strings.HasPrefix(raw, "func ") || strings.HasPrefix(raw, "type ") || strings.HasPrefix(raw, "var ") || strings.HasPrefix(raw, "const ") {
 		src = "package p\n" + raw
 	} else if strings.HasPrefix(raw, "{") && strings.HasSuffix(raw, "}") {
 		src = "package p\nfunc _testFunc() " + raw
@@ -99,14 +102,16 @@ func isLocalReceiver(ident *ast.Ident) bool {
 	return ident.Obj != nil
 }
 
-// DomainPurityRule enforces that domain entity/model tests contain zero mocks.
+// DomainPurityRule flags mock usage in domain entity/model tests as an advisory convention note.
 // Note: Helper-mediated mock instantiation outside the test AST is outside static boundary.
 type DomainPurityRule struct{}
 
+// NewDomainPurityRule creates an initialized DomainPurityRule.
 func NewDomainPurityRule() *DomainPurityRule {
 	return &DomainPurityRule{}
 }
 
+// Evaluate inspects a domain test unit for mock controller instantiation and reports advisory convention findings.
 func (r *DomainPurityRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var violations []models.Violation
 
@@ -163,18 +168,6 @@ func (r *DomainPurityRule) Evaluate(unit parser.TestUnit) []models.Violation {
 					isViolation = true
 				}
 			}
-		} else {
-			// Fallback heuristic for synthetic units without import carrier
-			pkgName := strings.ToLower(identName)
-			if pkgName == "gomock" && methodName == "NewController" {
-				isViolation = true
-			}
-			if pkgName == "mocks" && strings.HasPrefix(methodName, "NewMock") {
-				isViolation = true
-			}
-			if pkgName == "mock" && (strings.HasPrefix(methodName, "New") || methodName == "MatchedBy" || methodName == "Anything") {
-				isViolation = true
-			}
 		}
 
 		if isViolation {
@@ -183,12 +176,12 @@ func (r *DomainPurityRule) Evaluate(unit parser.TestUnit) []models.Violation {
 				seenLines[line] = true
 				violations = append(violations, models.Violation{
 					RuleID:     "GUARD-GO-01",
-					Severity:   models.SeverityBlocker,
+					Severity:   models.SeverityAdvisory,
 					FilePath:   unit.FilePath,
 					LineNumber: line,
 					Column:     col,
-					Message:    fmt.Sprintf("Domain purity violation in '%s': domain tests must be pure and contain zero mocks.", unit.Name),
-					Suggestion: "Remove mock controllers from domain tests. Test business logic using pure domain struct fixtures.",
+					Message:    fmt.Sprintf("Domain test '%s' uses mocks; consider pure fixtures if the team keeps domain tests mock-free.", unit.Name),
+					Suggestion: "Consider replacing mocks with pure domain fixtures if the team follows a mock-free domain test convention.",
 				})
 			}
 		}
@@ -196,6 +189,200 @@ func (r *DomainPurityRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	})
 
 	return violations
+}
+
+// SwallowedErrorRule flags if err != nil { return } statements in test bodies or
+// t.Run closures where errors are silently swallowed with bare returns.
+type SwallowedErrorRule struct{}
+
+// NewSwallowedErrorRule creates an initialized SwallowedErrorRule.
+func NewSwallowedErrorRule() *SwallowedErrorRule {
+	return &SwallowedErrorRule{}
+}
+
+func isNilIdent(expr ast.Expr) bool {
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name == "nil" && ident.Obj == nil
+	}
+	return false
+}
+
+func inspectBlockForSwallowedErrors(
+	fset *token.FileSet,
+	body *ast.BlockStmt,
+	unit parser.TestUnit,
+	testingParamObjs map[*ast.Object]bool,
+	suiteRecvObj *ast.Object,
+) []models.Violation {
+	var violations []models.Violation
+	if body == nil {
+		return violations
+	}
+
+	callAssignedVars := make(map[string]bool)
+	tRunFuncLits := make(map[*ast.FuncLit]bool)
+
+	// Identify t.Run closures within this body
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Run" || len(call.Args) < 2 {
+			return true
+		}
+		fnLit, ok := call.Args[1].(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		isTestingRunner := false
+		if id, ok := sel.X.(*ast.Ident); ok {
+			if testingParamObjs[id.Obj] || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
+				isTestingRunner = true
+			}
+		} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+			if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+				if id, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+					isTestingRunner = true
+				}
+			}
+		}
+		if isTestingRunner {
+			tRunFuncLits[fnLit] = true
+		}
+		return true
+	})
+
+	seenLines := make(map[int]bool)
+
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			// Do not descend into non-t.Run closures, and let t.Run closures be evaluated independently
+			return false
+		}
+
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			hasCall := false
+			for _, rhs := range stmt.Rhs {
+				if _, ok := rhs.(*ast.CallExpr); ok {
+					hasCall = true
+					break
+				}
+			}
+			if hasCall {
+				for _, lhs := range stmt.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+						callAssignedVars[id.Name] = true
+					}
+				}
+			}
+		case *ast.IfStmt:
+			if stmt.Init != nil {
+				if assign, ok := stmt.Init.(*ast.AssignStmt); ok {
+					hasCall := false
+					for _, rhs := range assign.Rhs {
+						if _, ok := rhs.(*ast.CallExpr); ok {
+							hasCall = true
+							break
+						}
+					}
+					if hasCall {
+						for _, lhs := range assign.Lhs {
+							if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+								callAssignedVars[id.Name] = true
+							}
+						}
+					}
+				}
+			}
+
+			if stmt.Else == nil && stmt.Body != nil && len(stmt.Body.List) == 1 {
+				if retStmt, ok := stmt.Body.List[0].(*ast.ReturnStmt); ok && len(retStmt.Results) == 0 {
+					if bin, ok := stmt.Cond.(*ast.BinaryExpr); ok && bin.Op == token.NEQ {
+						var errIdent *ast.Ident
+						if left, ok := bin.X.(*ast.Ident); ok && isNilIdent(bin.Y) && callAssignedVars[left.Name] {
+							errIdent = left
+						} else if right, ok := bin.Y.(*ast.Ident); ok && isNilIdent(bin.X) && callAssignedVars[right.Name] {
+							errIdent = right
+						}
+						if errIdent != nil {
+							line, col := getNodeLineAndColumn(fset, stmt, unit)
+							if !seenLines[line] {
+								seenLines[line] = true
+								violations = append(violations, models.Violation{
+									RuleID:     "GUARD-GO-SWALLOWED-ERR",
+									Severity:   models.SeverityWarning,
+									FilePath:   unit.FilePath,
+									LineNumber: line,
+									Column:     col,
+									Message:    fmt.Sprintf("Swallowed error in '%s': error '%s' is checked with a bare return instead of failing the test.", unit.Name, errIdent.Name),
+									Suggestion: "Fail the test with t.Fatalf or require.NoError instead of returning early.",
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	// Evaluate each t.Run closure in its own scope
+	for fnLit := range tRunFuncLits {
+		closureTestingParams := make(map[*ast.Object]bool)
+		if fnLit.Type != nil && fnLit.Type.Params != nil {
+			for _, f := range fnLit.Type.Params.List {
+				if isRecognizedTestingParam(f.Type, unit.FileImports) {
+					for _, name := range f.Names {
+						if name.Obj != nil {
+							closureTestingParams[name.Obj] = true
+						}
+					}
+				}
+			}
+		}
+		closureViolations := inspectBlockForSwallowedErrors(fset, fnLit.Body, unit, closureTestingParams, suiteRecvObj)
+		violations = append(violations, closureViolations...)
+	}
+
+	return violations
+}
+
+// Evaluate inspects test functions and t.Run closures for swallowed errors that return early instead of failing.
+func (r *SwallowedErrorRule) Evaluate(unit parser.TestUnit) []models.Violation {
+	var violations []models.Violation
+
+	fset, fn, err := getUnitAST(unit)
+	if err != nil || fn.Body == nil {
+		return violations
+	}
+
+	testingParamObjs := make(map[*ast.Object]bool)
+	if fn.Type != nil && fn.Type.Params != nil {
+		for _, f := range fn.Type.Params.List {
+			if isRecognizedTestingParam(f.Type, unit.FileImports) {
+				for _, name := range f.Names {
+					if name.Obj != nil {
+						testingParamObjs[name.Obj] = true
+					}
+				}
+			}
+		}
+	}
+
+	var suiteRecvObj *ast.Object
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		for _, name := range fn.Recv.List[0].Names {
+			if name.Obj != nil {
+				suiteRecvObj = name.Obj
+				break
+			}
+		}
+	}
+
+	return inspectBlockForSwallowedErrors(fset, fn.Body, unit, testingParamObjs, suiteRecvObj)
 }
 
 // TableDuplicateRule detects identical duplicate rows in Go table-driven tests.
@@ -394,6 +581,7 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 	return strings.Join(parts, ", "), fullContent
 }
 
+// Evaluate inspects table-driven test cases for duplicate row literals with identical non-name field contents.
 func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	var violations []models.Violation
 
@@ -599,6 +787,341 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			seenRows[normalizedKey] = true
 		}
 	}
+
+	return violations
+}
+
+// isWantFieldName reports whether name is a recognized want/expect field name.
+// Lower-cased name starts with want, expect, or exp followed by nothing or an upper-case letter.
+func isWantFieldName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{"expected", "expect", "want", "exp"} {
+		if strings.HasPrefix(lower, prefix) {
+			rem := name[len(prefix):]
+			if len(rem) == 0 {
+				return true
+			}
+			r, _ := utf8.DecodeRuneInString(rem)
+			if unicode.IsUpper(r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func resolveRowStructType(eltType ast.Expr, fn *ast.FuncDecl, unit parser.TestUnit) *ast.StructType {
+	switch t := eltType.(type) {
+	case *ast.StructType:
+		return t
+	case *ast.StarExpr:
+		return resolveRowStructType(t.X, fn, unit)
+	case *ast.Ident:
+		typeName := t.Name
+		if t.Obj != nil {
+			if ts, ok := t.Obj.Decl.(*ast.TypeSpec); ok {
+				if st, ok := ts.Type.(*ast.StructType); ok {
+					return st
+				}
+			}
+		}
+		if fn != nil && fn.Body != nil {
+			var found *ast.StructType
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if ts, ok := n.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+					if st, ok := ts.Type.(*ast.StructType); ok {
+						found = st
+						return false
+					}
+				}
+				return true
+			})
+			if found != nil {
+				return found
+			}
+		}
+		if unit.FilePath != "" {
+			if src, err := os.ReadFile(unit.FilePath); err == nil {
+				fileFset := token.NewFileSet()
+				if parsedFile, err := goparser.ParseFile(fileFset, unit.FilePath, src, 0); err == nil {
+					for _, decl := range parsedFile.Decls {
+						if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+							for _, spec := range gen.Specs {
+								if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+									if st, ok := ts.Type.(*ast.StructType); ok {
+										return st
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if unit.RawBody != "" {
+			fileFset := token.NewFileSet()
+			src := "package p\n" + unit.RawBody
+			if parsedFile, err := goparser.ParseFile(fileFset, unit.FilePath, src, 0); err == nil {
+				for _, decl := range parsedFile.Decls {
+					if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.TYPE {
+						for _, spec := range gen.Specs {
+							if ts, ok := spec.(*ast.TypeSpec); ok && ts.Name.Name == typeName {
+								if st, ok := ts.Type.(*ast.StructType); ok {
+									return st
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func isTableCompositeForWant(compLit *ast.CompositeLit) bool {
+	if len(compLit.Elts) < 1 {
+		return false
+	}
+
+	arrType, isArray := compLit.Type.(*ast.ArrayType)
+	if !isArray || arrType.Elt == nil {
+		return false
+	}
+	if !isStructRowElementType(arrType.Elt) {
+		return false
+	}
+
+	for _, elt := range compLit.Elts {
+		if !isStructRowLiteral(elt) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// UncheckedWantRule detects table-driven test row struct fields that define expected values
+// but are never read or asserted against in the test loop.
+type UncheckedWantRule struct{}
+
+// NewUncheckedWantRule creates an initialized UncheckedWantRule.
+func NewUncheckedWantRule() *UncheckedWantRule {
+	return &UncheckedWantRule{}
+}
+
+// Evaluate inspects table-driven test structures to flag want/expect fields never asserted in the test loop.
+func (r *UncheckedWantRule) Evaluate(unit parser.TestUnit) []models.Violation {
+	var violations []models.Violation
+
+	fset, fn, err := getUnitAST(unit)
+	if err != nil || fn.Body == nil {
+		return violations
+	}
+
+	testingParamObjs := make(map[*ast.Object]bool)
+	if fn.Type != nil && fn.Type.Params != nil {
+		for _, f := range fn.Type.Params.List {
+			if isRecognizedTestingParam(f.Type, unit.FileImports) {
+				for _, name := range f.Names {
+					if name.Obj != nil {
+						testingParamObjs[name.Obj] = true
+					}
+				}
+			}
+		}
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if fnLit, ok := n.(*ast.FuncLit); ok {
+			if fnLit.Type != nil && fnLit.Type.Params != nil {
+				for _, f := range fnLit.Type.Params.List {
+					if isRecognizedTestingParam(f.Type, unit.FileImports) {
+						for _, name := range f.Names {
+							if name.Obj != nil {
+								testingParamObjs[name.Obj] = true
+							}
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	var suiteRecvObj *ast.Object
+	if fn.Recv != nil && len(fn.Recv.List) > 0 {
+		for _, name := range fn.Recv.List[0].Names {
+			if name.Obj != nil {
+				suiteRecvObj = name.Obj
+				break
+			}
+		}
+	}
+
+	assignedTables := make(map[*ast.Object]*ast.CompositeLit)
+	for _, stmt := range fn.Body.List {
+		switch s := stmt.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range s.Lhs {
+				if ident, ok := lhs.(*ast.Ident); ok && ident.Obj != nil && i < len(s.Rhs) {
+					if compLit, ok := s.Rhs[i].(*ast.CompositeLit); ok && isTableCompositeForWant(compLit) {
+						assignedTables[ident.Obj] = compLit
+					}
+				}
+			}
+		case *ast.DeclStmt:
+			if gen, ok := s.Decl.(*ast.GenDecl); ok && gen.Tok == token.VAR {
+				for _, spec := range gen.Specs {
+					if vs, ok := spec.(*ast.ValueSpec); ok {
+						for i, name := range vs.Names {
+							if name.Obj != nil && i < len(vs.Values) {
+								if compLit, ok := vs.Values[i].(*ast.CompositeLit); ok && isTableCompositeForWant(compLit) {
+									assignedTables[name.Obj] = compLit
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(assignedTables) == 0 {
+		return violations
+	}
+
+	reportedFields := make(map[*ast.Ident]bool)
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rng, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		ident, ok := rng.X.(*ast.Ident)
+		if !ok || ident.Obj == nil {
+			return true
+		}
+		compLit, exists := assignedTables[ident.Obj]
+		if !exists {
+			return true
+		}
+
+		valIdent, ok := rng.Value.(*ast.Ident)
+		if !ok || valIdent.Name == "_" || valIdent.Obj == nil {
+			return true
+		}
+		rowObj := valIdent.Obj
+		rowName := valIdent.Name
+
+		hasRunCall := false
+		ast.Inspect(rng.Body, func(bn ast.Node) bool {
+			call, ok := bn.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Run" {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok {
+				if testingParamObjs[id.Obj] || (suiteRecvObj != nil && id.Obj == suiteRecvObj) {
+					hasRunCall = true
+					return false
+				}
+			} else if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+					if id, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+						hasRunCall = true
+						return false
+					}
+				}
+			}
+			return true
+		})
+		if !hasRunCall {
+			return true
+		}
+
+		passedWhole := false
+		ast.Inspect(rng.Body, func(bn ast.Node) bool {
+			call, ok := bn.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			for _, arg := range call.Args {
+				if id, ok := arg.(*ast.Ident); ok {
+					if id.Obj == rowObj || id.Name == rowName {
+						passedWhole = true
+						return false
+					}
+				}
+			}
+			return true
+		})
+		if passedWhole {
+			return true
+		}
+
+		arrType, isArray := compLit.Type.(*ast.ArrayType)
+		if !isArray || arrType.Elt == nil {
+			return true
+		}
+
+		structType := resolveRowStructType(arrType.Elt, fn, unit)
+		if structType == nil || structType.Fields == nil {
+			return true
+		}
+
+		type wantFieldItem struct {
+			name string
+			node *ast.Ident
+		}
+		var wantFields []wantFieldItem
+		for _, field := range structType.Fields.List {
+			for _, nameIdent := range field.Names {
+				if isWantFieldName(nameIdent.Name) {
+					wantFields = append(wantFields, wantFieldItem{
+						name: nameIdent.Name,
+						node: nameIdent,
+					})
+				}
+			}
+		}
+		if len(wantFields) == 0 {
+			return true
+		}
+
+		readFields := make(map[string]bool)
+		ast.Inspect(rng.Body, func(bn ast.Node) bool {
+			if sel, ok := bn.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok {
+					if id.Obj == rowObj || id.Name == rowName {
+						readFields[sel.Sel.Name] = true
+					}
+				}
+			}
+			return true
+		})
+
+		for _, wf := range wantFields {
+			if !readFields[wf.name] && !reportedFields[wf.node] {
+				reportedFields[wf.node] = true
+				line, col := getNodeLineAndColumn(fset, wf.node, unit)
+				violations = append(violations, models.Violation{
+					RuleID:     "GUARD-GO-UNCHECKED-WANT",
+					Severity:   models.SeverityWarning,
+					FilePath:   unit.FilePath,
+					LineNumber: line,
+					Column:     col,
+					Message:    fmt.Sprintf("Unchecked want field in '%s': field '%s' is declared in table row but never read in the test loop.", unit.Name, wf.name),
+					Suggestion: fmt.Sprintf("Assert against '%s' in the test loop or remove the unused field.", wf.name),
+				})
+			}
+		}
+
+		return true
+	})
 
 	return violations
 }

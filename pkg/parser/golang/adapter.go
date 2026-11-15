@@ -102,9 +102,11 @@ func importLocalName(path string) string {
 
 // importContext records the file-scope identifiers contributed by imports.
 type importContext struct {
-	localNames  map[string]string
-	testingName string // local identifier qualifying testing types; "" when unavailable
-	dotTesting  bool   // dot-imported "testing" exposes T/B/F unqualified
+	localNames   map[string]string
+	testingName  string // local identifier qualifying testing types; "" when unavailable
+	dotTesting   bool   // dot-imported "testing" exposes T/B/F unqualified
+	dotGomega    bool   // dot-imported gomega exposes Expect/Eventually/Consistently/NewWithT
+	dotQuicktest bool   // dot-imported quicktest exposes Assert/Check/New
 }
 
 // resolveImports builds the file-scope import context for a parsed Go file.
@@ -122,6 +124,12 @@ func resolveImports(fileAST *ast.File) importContext {
 			case ".":
 				if path == "testing" {
 					ctx.dotTesting = true
+				}
+				if isGomegaImportPath(path) {
+					ctx.dotGomega = true
+				}
+				if isQuicktestImportPath(path) {
+					ctx.dotQuicktest = true
 				}
 				continue
 			default:
@@ -338,6 +346,118 @@ func isAssertionImportPath(path string) bool {
 		strings.Contains(path, "matryer/is")
 }
 
+// isGomegaImportPath reports whether path is a canonical or vendor path for Gomega.
+func isGomegaImportPath(path string) bool {
+	return strings.Contains(path, "github.com/onsi/gomega") || path == "gomega"
+}
+
+// isQuicktestImportPath reports whether path is a canonical import for Quicktest.
+func isQuicktestImportPath(path string) bool {
+	return path == "github.com/frankban/quicktest" ||
+		path == "github.com/go-quicktest/qt" ||
+		strings.HasPrefix(path, "github.com/frankban/quicktest/") ||
+		strings.HasPrefix(path, "github.com/go-quicktest/qt/")
+}
+
+// isGomegaAssertionMethod reports whether method is a Gomega terminal assertion matcher.
+func isGomegaAssertionMethod(method string) bool {
+	switch method {
+	case "To", "ToNot", "NotTo", "Should", "ShouldNot":
+		return true
+	}
+	return false
+}
+
+// isGomegaExpectMethod reports whether method is a Gomega assertion initiator.
+func isGomegaExpectMethod(method string) bool {
+	switch method {
+	case "Expect", "Eventually", "Consistently":
+		return true
+	}
+	return false
+}
+
+// isExternalHelperName reports whether the function name follows assertion naming conventions.
+func isExternalHelperName(name string) bool {
+	for _, prefix := range []string{"Assert", "Require", "Expect", "Check", "Verify", "Must"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	for _, substr := range []string{"Equal", "Golden", "Snapshot", "Match", "Diff"} {
+		if strings.Contains(name, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// isBuiltinFunc reports whether name is a Go predeclared builtin function.
+func isBuiltinFunc(name string) bool {
+	switch name {
+	case "append", "cap", "close", "complex", "copy", "delete", "imag", "len",
+		"make", "new", "panic", "print", "println", "real", "recover",
+		"clear", "min", "max":
+		return true
+	}
+	return false
+}
+
+// isPackageHelperName reports whether an unqualified function name follows assertion conventions case-insensitively.
+// Matches start with assert, require, expect, check, verify, must, or contains equal, golden, snapshot, match, diff.
+func isPackageHelperName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{"assert", "require", "expect", "check", "verify", "must"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	for _, substr := range []string{"equal", "golden", "snapshot", "match", "diff"} {
+		if strings.Contains(lower, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// isStandardLibraryImport reports whether import path belongs to the Go standard library.
+// Non-standard library packages contain a dot in the first path segment.
+func isStandardLibraryImport(path string) bool {
+	if path == "" {
+		return true
+	}
+	first := path
+	if idx := strings.Index(path, "/"); idx != -1 {
+		first = path[:idx]
+	}
+	return !strings.Contains(first, ".")
+}
+
+// isTestingParamArg reports whether expr refers to an active testing parameter.
+func isTestingParamArg(expr ast.Expr, testingParamSet map[*ast.Object]bool, recvParam *ast.Object) bool {
+	if ident, ok := expr.(*ast.Ident); ok && ident.Obj != nil {
+		return testingParamSet[ident.Obj] || (recvParam != nil && ident.Obj == recvParam)
+	}
+	if call, ok := expr.(*ast.CallExpr); ok {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "T" {
+			if ident, ok := sel.X.(*ast.Ident); ok && recvParam != nil && ident.Obj == recvParam {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// callPassesTestingParam reports whether any argument in args is the test's testing parameter.
+func callPassesTestingParam(args []ast.Expr, testingParamSet map[*ast.Object]bool, recvParam *ast.Object) bool {
+	for _, arg := range args {
+		if isTestingParamArg(arg, testingParamSet, recvParam) {
+			return true
+		}
+	}
+	return false
+}
+
 // findExecutableAssertions searches the AST body of a test function for
 // assertion calls while ignoring string literals, comments, and constructors.
 // A call counts as an assertion only when it is made on the testing parameter,
@@ -545,6 +665,8 @@ func findExecutableAssertions(
 	}
 
 	assertionReceivers := make(map[*ast.Object]bool)
+	quicktestReceivers := make(map[*ast.Object]bool)
+	gomegaReceivers := make(map[*ast.Object]bool)
 	gomockControllers := make(map[*ast.Object]bool)
 	gomockCtrlFields := make(map[string]bool)
 	gomockMocks := make(map[*ast.Object]bool)
@@ -625,9 +747,26 @@ func findExecutableAssertions(
 					}
 				} else if sel.Sel.Name == "New" {
 					pkgIdent, ok := sel.X.(*ast.Ident)
-					if ok && pkgIdent.Obj == nil && isAssertionImportPath(imports.localNames[pkgIdent.Name]) {
-						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
-							assertionReceivers[lhs.Obj] = true
+					if ok && pkgIdent.Obj == nil {
+						if isAssertionImportPath(imports.localNames[pkgIdent.Name]) {
+							if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+								assertionReceivers[lhs.Obj] = true
+							}
+						} else if isQuicktestImportPath(imports.localNames[pkgIdent.Name]) {
+							if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+								if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+									quicktestReceivers[lhs.Obj] = true
+								}
+							}
+						}
+					}
+				} else if sel.Sel.Name == "NewWithT" || sel.Sel.Name == "NewGomegaWithT" {
+					pkgIdent, ok := sel.X.(*ast.Ident)
+					if ok && pkgIdent.Obj == nil && isGomegaImportPath(imports.localNames[pkgIdent.Name]) {
+						if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+							if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+								gomegaReceivers[lhs.Obj] = true
+							}
 						}
 					}
 				} else if recvParam != nil && (sel.Sel.Name == "Require" || sel.Sel.Name == "Assert") {
@@ -657,8 +796,19 @@ func findExecutableAssertions(
 					}
 				}
 			} else if fnIdent, ok := call.Fun.(*ast.Ident); ok {
-				if recvParam == nil && fnIdent.Obj == nil && declaredTopLevelFuncs != nil && declaredTopLevelFuncs[fnIdent.Name] == nil {
-					// G4: Cross-file mock factory passing testing param
+				if (fnIdent.Name == "NewWithT" || fnIdent.Name == "NewGomegaWithT") && imports.dotGomega {
+					if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+							gomegaReceivers[lhs.Obj] = true
+						}
+					}
+				} else if fnIdent.Name == "New" && imports.dotQuicktest {
+					if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+						if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
+							quicktestReceivers[lhs.Obj] = true
+						}
+					}
+				} else if recvParam == nil && fnIdent.Obj == nil && declaredTopLevelFuncs != nil && declaredTopLevelFuncs[fnIdent.Name] == nil {
 					for _, arg := range call.Args {
 						if argIdent, ok := arg.(*ast.Ident); ok && testingParamSet[argIdent.Obj] {
 							if lhs, ok := node.Lhs[0].(*ast.Ident); ok && lhs.Obj != nil {
@@ -766,11 +916,51 @@ func findExecutableAssertions(
 			}
 		}
 
+		if ident, ok := call.Fun.(*ast.Ident); ok {
+			if ident.Obj == nil && imports.dotQuicktest {
+				if ident.Name == "Assert" || ident.Name == "Check" {
+					if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+						add("qt." + ident.Name)
+						return true
+					}
+				}
+			}
+			// Package helper: unqualified call to function not declared in this file and not a builtin.
+			// Trade-off: helper bodies across files in the same package are not inspected without whole-package loading.
+			if ident.Obj == nil && !isBuiltinFunc(ident.Name) && (declaredTopLevelFuncs == nil || declaredTopLevelFuncs[ident.Name] == nil) {
+				if isPackageHelperName(ident.Name) && callPassesTestingParam(call.Args, testingParamSet, recvParam) {
+					add("package-helper:" + ident.Name)
+					return true
+				}
+			}
+		}
+
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
 		methodName := sel.Sel.Name
+
+		// Gomega: .To(...), .ToNot(...), .NotTo(...), .Should(...), .ShouldNot(...)
+		if isGomegaAssertionMethod(methodName) {
+			if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+				if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && isGomegaExpectMethod(innerSel.Sel.Name) {
+					if id, ok := innerSel.X.(*ast.Ident); ok {
+						if id.Obj != nil && gomegaReceivers[id.Obj] {
+							add("gomega." + methodName)
+							return true
+						}
+						if id.Obj == nil && isGomegaImportPath(imports.localNames[id.Name]) {
+							add("gomega." + methodName)
+							return true
+						}
+					}
+				} else if innerId, ok := innerCall.Fun.(*ast.Ident); ok && innerId.Obj == nil && imports.dotGomega && isGomegaExpectMethod(innerId.Name) {
+					add("gomega." + methodName)
+					return true
+				}
+			}
+		}
 
 		// G5: Subtest delegation: t.Run("name", fnIdent) or s.Run("name", fnIdent)
 		if methodName == "Run" && len(call.Args) >= 2 {
@@ -878,14 +1068,36 @@ func findExecutableAssertions(
 			return true
 		}
 
-		// 2. Calls on a known assertion package (assert.*, require.*, is.*).
+		// 2. Calls on a known assertion package (assert.*, require.*, is.*, qt.*, external helper).
 		if receiver.Obj == nil {
-			if importPath, ok := imports.localNames[receiverName]; ok && isAssertionImportPath(importPath) {
-				if methodName != "New" {
-					add(receiverName + "." + methodName)
+			if importPath, ok := imports.localNames[receiverName]; ok {
+				if isAssertionImportPath(importPath) {
+					if methodName != "New" {
+						add(receiverName + "." + methodName)
+					}
+					return true
 				}
-				return true
+				if isQuicktestImportPath(importPath) && (methodName == "Assert" || methodName == "Check") {
+					if len(call.Args) >= 1 && isTestingParamArg(call.Args[0], testingParamSet, recvParam) {
+						add(receiverName + "." + methodName)
+						return true
+					}
+				}
+				// External assertion helper: non-standard library imported function receiving testing param.
+				// Trade-off: the helper function body is not inspected.
+				if !isStandardLibraryImport(importPath) && isExternalHelperName(methodName) {
+					if callPassesTestingParam(call.Args, testingParamSet, recvParam) {
+						add("external-helper:" + receiverName + "." + methodName)
+						return true
+					}
+				}
 			}
+		}
+
+		// Quicktest receiver call: c.Assert(...) or c.Check(...)
+		if receiver.Obj != nil && quicktestReceivers[receiver.Obj] && (methodName == "Assert" || methodName == "Check") {
+			add("qt." + methodName)
+			return true
 		}
 
 		// 3. Calls on a constructor-established assertion receiver.

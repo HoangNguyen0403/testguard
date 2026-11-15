@@ -442,3 +442,274 @@ void main() {
 		t.Errorf("expected unit 1 RawBody to contain fallbackB, got %q", units[1].RawBody)
 	}
 }
+
+func TestLocateTests_DirectAssertions(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		wantAssert string
+	}{
+		{
+			name: "verifyZeroInteractions",
+			source: `void main() {
+				test('zero interactions', () {
+					verifyZeroInteractions(mockRepo);
+				});
+			}`,
+			wantAssert: "verifyZeroInteractions",
+		},
+		{
+			name: "verifyNoMoreInteractions",
+			source: `void main() {
+				test('no more interactions', () {
+					verifyNoMoreInteractions(mockRepo);
+				});
+			}`,
+			wantAssert: "verifyNoMoreInteractions",
+		},
+		{
+			name: "fail in branch",
+			source: `void main() {
+				test('fail in fold', () {
+					result.fold((l) => fail('expected right'), (r) => r);
+				});
+			}`,
+			wantAssert: "fail",
+		},
+		{
+			name: "expectAsync0",
+			source: `void main() {
+				test('async callback 0', () {
+					stream.listen(expectAsync0(() {}));
+				});
+			}`,
+			wantAssert: "expectAsync0",
+		},
+		{
+			name: "expectAsync1",
+			source: `void main() {
+				test('async callback 1', () {
+					stream.listen(expectAsync1((val) {}));
+				});
+			}`,
+			wantAssert: "expectAsync1",
+		},
+		{
+			name: "expectAsync6",
+			source: `void main() {
+				test('async callback 6', () {
+					stream.listen(expectAsync6((a, b, c, d, e, f) {}));
+				});
+			}`,
+			wantAssert: "expectAsync6",
+		},
+		{
+			name: "expectAsyncUntil0",
+			source: `void main() {
+				test('async until callback 0', () {
+					stream.listen(expectAsyncUntil0(() {}, () => true));
+				});
+			}`,
+			wantAssert: "expectAsyncUntil0",
+		},
+		{
+			name: "expectAsyncUntil6",
+			source: `void main() {
+				test('async until callback 6', () {
+					stream.listen(expectAsyncUntil6((a, b, c, d, e, f) {}, () => true));
+				});
+			}`,
+			wantAssert: "expectAsyncUntil6",
+		},
+	}
+
+	adapter := dart.NewAdapter()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			units, err := adapter.LocateTests([]byte(tc.source), "test.dart")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(units) != 1 {
+				t.Fatalf("expected 1 unit, got %d", len(units))
+			}
+			found := false
+			for _, a := range units[0].Assertions {
+				if a == tc.wantAssert {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("expected assertion %q in %+v", tc.wantAssert, units[0].Assertions)
+			}
+		})
+	}
+}
+
+func TestLocateTests_HelperWithNewAssertion(t *testing.T) {
+	source := `
+		void checkClean(MockRepo r) {
+			verifyZeroInteractions(r);
+		}
+
+		void main() {
+			test('uses helper with verifyZeroInteractions', () {
+				checkClean(repo);
+			});
+		}
+	`
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests([]byte(source), "test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "helper:checkClean" {
+		t.Errorf("expected helper:checkClean assertion, got %+v", units[0].Assertions)
+	}
+}
+
+func TestLocateTests_Scope(t *testing.T) {
+	source := `
+		void main() {
+			test('top level test', () {
+				expect(1, 1);
+			});
+
+			blocTest<UserBloc, UserState>(
+				'top level blocTest',
+				build: () => UserBloc(),
+				expect: () => [],
+			);
+
+			group('cache operations', () {
+				test('when cache is warm', () {
+					expect(true, isTrue);
+				});
+
+				group('eviction', () {
+					test('evicts oldest', () {
+						expect(true, isTrue);
+					});
+
+					testWidgets('widget in eviction', (tester) async {
+						expect(find.text('clean'), findsOneWidget);
+					});
+
+					blocTest<UserBloc, UserState>(
+						'blocTest in eviction',
+						build: () => UserBloc(),
+						expect: () => [],
+					);
+				});
+			});
+
+			group('second root group', () {
+				test('second group test', () {
+					expect(2, 2);
+				});
+			});
+		}
+	`
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests([]byte(source), "scope_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error locating tests: %v", err)
+	}
+
+	unitScopeMap := make(map[string]string)
+	for _, u := range units {
+		unitScopeMap[u.Name] = u.Scope
+	}
+
+	expectedScopes := map[string]string{
+		"top level test":       "",
+		"top level blocTest":   "",
+		"when cache is warm":   "cache operations",
+		"evicts oldest":        "cache operations > eviction",
+		"widget in eviction":   "cache operations > eviction",
+		"blocTest in eviction": "cache operations > eviction",
+		"second group test":    "second root group",
+	}
+
+	for testName, expectedScope := range expectedScopes {
+		gotScope, ok := unitScopeMap[testName]
+		if !ok {
+			t.Errorf("test %q not found in located units", testName)
+			continue
+		}
+		if gotScope != expectedScope {
+			t.Errorf("test %q: expected scope %q, got %q", testName, expectedScope, gotScope)
+		}
+	}
+}
+
+func TestLocateTests_NestedSeedBody(t *testing.T) {
+	source := `
+		void main() {
+			blocTest<UserBloc, UserState>(
+				'nested seed test',
+				build: () => UserBloc(),
+				seed: () => UserState(user: User(name: 'alice'), status: Status.idle),
+				act: (bloc) => bloc.add(Refresh()),
+				expect: () => [
+					isA<UserState>()
+						.having((s) => s.status, 'status', Status.error)
+						.having((s) => s.user, 'user', User(name: 'alice')),
+				],
+			);
+		}
+	`
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests([]byte(source), "test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	wantSeed := "UserState(user: User(name: 'alice'), status: Status.idle)"
+	if units[0].SeedBody != wantSeed {
+		t.Errorf("expected SeedBody %q, got %q", wantSeed, units[0].SeedBody)
+	}
+}
+
+func TestLocateTests_BlocStateTypeMeta(t *testing.T) {
+	source := `
+		void main() {
+			blocTest<UserBloc, UserState>(
+				'typed blocTest',
+				build: () => UserBloc(),
+				expect: () => [],
+			);
+
+			blocTest(
+				'untyped blocTest',
+				build: () => UserBloc(),
+				expect: () => [],
+			);
+		}
+	`
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests([]byte(source), "test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(units))
+	}
+
+	// Typed blocTest
+	if units[0].Meta == nil || units[0].Meta[dart.MetaBlocStateType] != "UserState" {
+		t.Errorf("expected Meta[%q] = %q, got %+v", dart.MetaBlocStateType, "UserState", units[0].Meta)
+	}
+
+	// Untyped blocTest
+	if units[1].Meta != nil && units[1].Meta[dart.MetaBlocStateType] != "" {
+		t.Errorf("expected untyped Meta[%q] to be empty, got %+v", dart.MetaBlocStateType, units[1].Meta)
+	}
+}

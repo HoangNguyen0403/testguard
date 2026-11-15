@@ -6,9 +6,85 @@ import (
 	"testing"
 
 	"github.com/HoangNguyen0403/testguard/pkg/detectors/clone"
+	"github.com/HoangNguyen0403/testguard/pkg/models"
 	"github.com/HoangNguyen0403/testguard/pkg/parser"
 	"github.com/HoangNguyen0403/testguard/pkg/parser/golang"
 )
+
+func TestClone_DifferentScopeNoFinding(t *testing.T) {
+	test1 := parser.TestUnit{
+		Name:      "shows the panel",
+		FilePath:  "panel.test.ts",
+		Scope:     "when admin",
+		StartLine: 6,
+		RawBody:   "render(<Panel />); expect(screen.getByRole('button', { name: 'Delete' })).toBeVisible();",
+	}
+	test2 := parser.TestUnit{
+		Name:      "shows the panel",
+		FilePath:  "panel.test.ts",
+		Scope:     "when owner",
+		StartLine: 14,
+		RawBody:   "render(<Panel />); expect(screen.getByRole('button', { name: 'Delete' })).toBeVisible();",
+	}
+
+	detector := clone.New()
+	violations := detector.Check([]parser.TestUnit{test1, test2})
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for identical bodies in different scopes, got %d (%+v)", len(violations), violations)
+	}
+}
+
+func TestClone_SameScopeWarning(t *testing.T) {
+	test1 := parser.TestUnit{
+		Name:      "shows the panel",
+		FilePath:  "panel.test.ts",
+		Scope:     "when admin",
+		StartLine: 6,
+		RawBody:   "render(<Panel />); expect(screen.getByRole('button', { name: 'Delete' })).toBeVisible();",
+	}
+	test2 := parser.TestUnit{
+		Name:      "shows the panel duplicate",
+		FilePath:  "panel.test.ts",
+		Scope:     "when admin",
+		StartLine: 14,
+		RawBody:   "render(<Panel />); expect(screen.getByRole('button', { name: 'Delete' })).toBeVisible();",
+	}
+
+	detector := clone.New()
+	violations := detector.Check([]parser.TestUnit{test1, test2})
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation for identical bodies in same scope, got %d", len(violations))
+	}
+	if violations[0].RuleID != "GUARD-UNIV-01" {
+		t.Errorf("expected GUARD-UNIV-01, got %s", violations[0].RuleID)
+	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected SeverityWarning for GUARD-UNIV-01, got %v", violations[0].Severity)
+	}
+}
+
+func TestClone_DifferingOnlyByLiteralsNoFinding(t *testing.T) {
+	test1 := parser.TestUnit{
+		Name:      "adds small numbers",
+		FilePath:  "calc.test.ts",
+		Scope:     "add boundaries",
+		StartLine: 21,
+		RawBody:   "expect(add(1, 2)).toBe(3);",
+	}
+	test2 := parser.TestUnit{
+		Name:      "adds zero",
+		FilePath:  "calc.test.ts",
+		Scope:     "add boundaries",
+		StartLine: 24,
+		RawBody:   "expect(add(0, 0)).toBe(0);",
+	}
+
+	detector := clone.New()
+	violations := detector.Check([]parser.TestUnit{test1, test2})
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for 2 units differing only by literals, got %d (%+v)", len(violations), violations)
+	}
+}
 
 func TestDetectExactClones(t *testing.T) {
 	test1 := parser.TestUnit{
@@ -22,7 +98,7 @@ func TestDetectExactClones(t *testing.T) {
 		Name:      "test2",
 		FilePath:  "auth_test.dart",
 		StartLine: 25,
-		RawBody:   "expect(auth.login('baz', 'qux'), equals(true));",
+		RawBody:   "expect(auth.login('foo', 'bar'), equals(true));",
 	}
 
 	detector := clone.New()
@@ -35,9 +111,15 @@ func TestDetectExactClones(t *testing.T) {
 	if violations[0].RuleID != "GUARD-UNIV-01" {
 		t.Errorf("expected GUARD-UNIV-01, got %s", violations[0].RuleID)
 	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected SeverityWarning for GUARD-UNIV-01, got %v", violations[0].Severity)
+	}
+	if !strings.Contains(violations[0].Message, "identical execution tokens") {
+		t.Errorf("expected identical execution tokens message, got: %s", violations[0].Message)
+	}
 }
 
-func TestDetectExactClones_DistinctBoundaryValuesMessage(t *testing.T) {
+func TestDetectExactClones_DistinctBoundaryValuesNoFinding(t *testing.T) {
 	test1 := parser.TestUnit{
 		Name:      "test_zero_boundary",
 		FilePath:  "calc_test.go",
@@ -55,15 +137,8 @@ func TestDetectExactClones_DistinctBoundaryValuesMessage(t *testing.T) {
 	detector := clone.New()
 	violations := detector.Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 advisory violation for structural similarity, got %d", len(violations))
-	}
-	v := violations[0]
-	if !strings.Contains(v.Message, "not proven semantic redundancy") {
-		t.Errorf("expected message to note that literal normalization does not prove semantic redundancy, got: %s", v.Message)
-	}
-	if !strings.Contains(v.Suggestion, "Do not treat syntactic clone similarity as proof of semantic redundancy or delete cases") {
-		t.Errorf("expected suggestion to caution against deleting cases, got: %s", v.Suggestion)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for distinct boundary values differing only in literals, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -85,15 +160,8 @@ func TestDetectExactClones_WhitespaceInsideStringsNotExact(t *testing.T) {
 	detector := clone.New()
 	violations := detector.Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 advisory violation for structural similarity, got %d", len(violations))
-	}
-	v := violations[0]
-	if strings.Contains(v.Message, "identical execution tokens") {
-		t.Errorf("expected structural similarity message, not identical execution tokens: %s", v.Message)
-	}
-	if !strings.Contains(v.Message, "not proven semantic redundancy") {
-		t.Errorf("expected structural similarity message, got: %s", v.Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for 2 units differing only in string literals, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -166,6 +234,9 @@ func TestBeta(t *testing.T) {
 	if violations[0].RuleID != "GUARD-UNIV-01" {
 		t.Errorf("expected GUARD-UNIV-01, got %s", violations[0].RuleID)
 	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected SeverityWarning for GUARD-UNIV-01, got %v", violations[0].Severity)
+	}
 	if !strings.Contains(violations[0].Message, "identical execution tokens") {
 		t.Errorf("expected identical execution tokens, got: %s", violations[0].Message)
 	}
@@ -197,15 +268,8 @@ func TestBeta(t *testing.T) {
 	}
 
 	violations := clone.New().Check(units)
-
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 structural similarity advisory, got %d (%+v)", len(violations), violations)
-	}
-	if strings.Contains(violations[0].Message, "identical execution tokens") {
-		t.Errorf("distinct literals must not claim identical execution tokens: %s", violations[0].Message)
-	}
-	if !strings.Contains(violations[0].Message, "not proven semantic redundancy") {
-		t.Errorf("expected structural similarity message, got: %s", violations[0].Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for distinct literals under AC4, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -277,14 +341,8 @@ func TestDetectExactClones_JavaScriptASINotExact(t *testing.T) {
 
 	violations := clone.New().Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 structural advisory for ASI-sensitive bodies, got %d (%+v)", len(violations), violations)
-	}
-	if strings.Contains(violations[0].Message, "identical execution tokens") {
-		t.Errorf("newline-sensitive bodies must not claim identical execution tokens: %s", violations[0].Message)
-	}
-	if !strings.Contains(violations[0].Message, "not proven semantic redundancy") {
-		t.Errorf("expected structural similarity message, got: %s", violations[0].Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for ASI newline variants under AC4, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -305,11 +363,8 @@ func TestDetectExactClones_SignedBoundarySpacingInsensitive(t *testing.T) {
 
 	violations := clone.New().Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 structural advisory regardless of sign spacing, got %d (%+v)", len(violations), violations)
-	}
-	if strings.Contains(violations[0].Message, "identical execution tokens") {
-		t.Errorf("distinct boundary values must not claim identical execution tokens: %s", violations[0].Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for literal sign spacing under AC4, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -330,11 +385,8 @@ func TestDetectExactClones_RawAndEscapedLiteralsNotExact(t *testing.T) {
 
 	violations := clone.New().Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 structural advisory for literal variants, got %d (%+v)", len(violations), violations)
-	}
-	if strings.Contains(violations[0].Message, "identical execution tokens") {
-		t.Errorf("distinct literal bytes must not claim identical execution tokens: %s", violations[0].Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for raw/escaped literal variants under AC4, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -358,6 +410,9 @@ func TestDetectExactClones_GoCommentsDoNotChangeExactness(t *testing.T) {
 	if len(violations) != 1 {
 		t.Fatalf("expected 1 exact clone violation, got %d (%+v)", len(violations), violations)
 	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected SeverityWarning for GUARD-UNIV-01, got %v", violations[0].Severity)
+	}
 	if !strings.Contains(violations[0].Message, "identical execution tokens") {
 		t.Errorf("comments must not change executable tokens, got: %s", violations[0].Message)
 	}
@@ -380,14 +435,8 @@ func TestDetectExactClones_JavaScriptBlockCommentNewlineNotExact(t *testing.T) {
 
 	violations := clone.New().Check([]parser.TestUnit{test1, test2})
 
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 structural advisory for comment-carried ASI, got %d (%+v)", len(violations), violations)
-	}
-	if strings.Contains(violations[0].Message, "identical execution tokens") {
-		t.Errorf("a line terminator inside a block comment must not allow an exact claim: %s", violations[0].Message)
-	}
-	if !strings.Contains(violations[0].Message, "not proven semantic redundancy") {
-		t.Errorf("expected structural similarity message, got: %s", violations[0].Message)
+	if len(violations) != 0 {
+		t.Fatalf("expected 0 violations for comment-carried newline variant under AC4, got %d (%+v)", len(violations), violations)
 	}
 }
 
@@ -410,6 +459,9 @@ func TestDetectExactClones_JavaScriptInlineBlockCommentStillExact(t *testing.T) 
 
 	if len(violations) != 1 {
 		t.Fatalf("expected 1 exact clone violation, got %d (%+v)", len(violations), violations)
+	}
+	if violations[0].Severity != models.SeverityWarning {
+		t.Errorf("expected SeverityWarning for GUARD-UNIV-01, got %v", violations[0].Severity)
 	}
 	if !strings.Contains(violations[0].Message, "identical execution tokens") {
 		t.Errorf("single-line comment without a line terminator must remain execution-identical, got: %s", violations[0].Message)
@@ -535,7 +587,10 @@ func TestCloneRouting_TwoIdenticalPlusOneLiteralVariant(t *testing.T) {
 	if duplicateCount != 1 {
 		t.Errorf("expected 1 Duplicate test body violation, got %d", duplicateCount)
 	}
-	if similarCount != 1 {
-		t.Errorf("expected 1 Similar test structure violation, got %d", similarCount)
+	if similarCount != 0 {
+		t.Errorf("expected 0 Similar test structure violations under AC4, got %d", similarCount)
+	}
+	if len(violations) != 1 {
+		t.Errorf("expected exactly 1 violation total under AC4, got %d", len(violations))
 	}
 }

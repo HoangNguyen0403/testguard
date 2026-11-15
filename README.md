@@ -2,7 +2,7 @@
 
 **Standalone, Zero-Config Polyglot Test Quality & Architectural Boundary Guard CLI**
 
-TestGuard inspects test suites, detects duplicate/clone tests, flags vanity test anti-patterns (zero assertions, seed echoes, uncovered mutations), and enforces architectural boundaries across **Dart/Flutter**, **Go**, and **TypeScript/JavaScript**.
+TestGuard inspects test suites, detects duplicate/clone tests, flags vanity test anti-patterns (zero assertions, seed echoes, mock echoes, weak oracles, skipped or focused tests), and enforces architectural boundaries across **Dart/Flutter**, **Go**, **TypeScript/JavaScript**, **Kotlin**, and **Swift**.
 
 ---
 
@@ -117,6 +117,7 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 ### Heuristic Boundaries & Adoption Policy
 
 - **Static Heuristics Only**: TestGuard inspects static AST token structures and syntactic patterns. It does not execute tests, invoke dynamic mutation testing harnesses, or verify runtime behavioral correctness.
+- **Documented Recall Gaps**: Constructs the engine deliberately does not report (cross-file helpers, hollow tests hidden behind unreferenced nested-function assertions, BLoC shapes outside the modelled subset, adapter lexical boundaries) are listed in `ARCHITECTURE.md` §8. Absence of a finding is not proof that a test is effective.
 - **No Production Assurance Claims**: TestGuard provides local-untrusted linting and anti-pattern detection; it does not certify production reliability or complete fault coverage.
 - **Observation-First Adoption**: Teams should deploy TestGuard in CI under observation-only (non-blocking) mode. Activating blocking gates requires human owner review and calibrated baseline results. Rollback ownership is explicit: disable the blocking gate while retaining reporting artifacts; never convert missing evidence into success.
 - **Unreleased Contract Boundary**: The 0.1.4 envelope and exit code semantics represent an unreleased specification boundary.
@@ -127,12 +128,14 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 
 | Language / Scope | Test Runners | Key Guardrails |
 |---|---|---|
-| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), exact token duplicates (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), and placeholder test names (`GUARD-UNIV-NAME`). |
-| **Dart / Flutter** | `flutter_test`, `bloc_test` | Traps seed echoes (`GUARD-DART-SEED-ECHO`), identical whole-scenario BLoC duplicates (`GUARD-DART-BLOC-DUPLICATE`), and pass-through mock echoes (`GUARD-DART-MOCK-ECHO`). |
-| **Go** | `testing`, `testify` | Clean Architecture domain purity (zero mocks in domain models: `GUARD-GO-01`) and table-test duplicate input rows (`GUARD-GO-03`). |
-| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps > 0 ms in unit tests (`GUARD-REACT-02`), shallow mock echoes (`GUARD-REACT-01`), NestJS controller echoes & unmocked DB leaks, and massive snapshot-only smells (`GUARD-TS-01`). |
+| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), focused tests (`GUARD-UNIV-FOCUS`, TypeScript and Dart), exact duplicate test bodies (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), and placeholder test names (`GUARD-UNIV-NAME`). |
+| **Dart / Flutter** | `flutter_test`, `bloc_test` | Seed echoes (`GUARD-DART-SEED-ECHO`), vacuous base-state assertions (`GUARD-DART-VACUOUS-STATE`), identical whole-scenario BLoC duplicates (`GUARD-DART-BLOC-DUPLICATE`), and pass-through mock echoes (`GUARD-DART-MOCK-ECHO`). |
+| **Go** | `testing`, `testify`, `gomega`, `quicktest` | Domain-test mock usage as an advisory convention note (`GUARD-GO-01`), table-test duplicate input rows (`GUARD-GO-03`), swallowed errors via bare `return` (`GUARD-GO-SWALLOWED-ERR`), and declared-but-unread table expectations (`GUARD-GO-UNCHECKED-WANT`). |
+| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps in unit tests (`GUARD-REACT-02`), snapshot-only assertions (`GUARD-TS-01`), floating promise assertions (`GUARD-TS-FLOATING-ASSERT`), catch-only error paths (`GUARD-TS-CATCH-ONLY`), conditionally reached assertions (`GUARD-TS-CONDITIONAL-ASSERT`), existence-only oracles (`GUARD-TS-EXISTENCE-ONLY`), self-mocking assertions (`GUARD-TS-SELF-MOCK`), auto-mocked subjects (`GUARD-TS-MOCKED-SUT`), and NestJS controller echoes / unmocked database modules (`GUARD-NEST-01`, `GUARD-NEST-02`). |
 | **E2E / Integration** | `Playwright`, `Flutter IntegrationTest` | Fixed arbitrary hard waits in end-to-end tests (`GUARD-E2E-01`). |
-| **Mobile (Android/iOS)** | `MockK`, `XCTest` | MockK pass-through echoes, unadvanced coroutines, and excessive expectation timeouts. |
+| **Mobile (Android/iOS)** | `MockK`, `XCTest` | MockK pass-through echoes (`GUARD-KT-01`), unadvanced coroutine virtual time under `StandardTestDispatcher` (`GUARD-KT-02`), and long expectation timeouts (`GUARD-SWIFT-01`). |
+
+Run `testguard rules` for the authoritative list with severities; `testguard explain <RULE-ID>` prints rationale and remediation.
 ---
 
 ## 📄 Documentation

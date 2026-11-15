@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
+## [Unreleased]
+
+### Added
+- **Real Language Adapters for Every Supported Language**: TypeScript/JavaScript (`.ts .tsx .js .jsx .mjs .cjs .mts .cts`), Kotlin (`.kt`), and Swift (`.swift`) are now parsed by dedicated adapters instead of the previous file-wide regex heuristic. An adapter failure is reported as `parse_failed`, exactly like Go and Dart. `analysis.analyzed_tests` counts the units those adapters return.
+- **TypeScript / JavaScript Rule Pack** (Warning unless stated): `GUARD-TS-FLOATING-ASSERT` (un-awaited `.resolves`/`.rejects`), `GUARD-TS-CATCH-ONLY` (assertions reachable only from `catch`), `GUARD-TS-CONDITIONAL-ASSERT` (a branch can assert nothing), `GUARD-TS-EXISTENCE-ONLY` (Advisory: presence-only oracles), `GUARD-TS-SELF-MOCK` (test invokes the mock it asserts on), `GUARD-TS-MOCKED-SUT` (file auto-mocks its own subject).
+- **Go Rules**: `GUARD-GO-SWALLOWED-ERR` (`if err != nil { return }`) and `GUARD-GO-UNCHECKED-WANT` (table row expectation fields never read in the loop body).
+- **Dart Rule**: `GUARD-DART-VACUOUS-STATE` (bare `isA<BaseState>()` with no `.having` and no `verify`).
+- **Hygiene Rules**: `GUARD-UNIV-FOCUS` (committed `it.only`/`fit`/`solo: true`, reported for TypeScript and Dart).
+- **Kotlin / Swift Rules**: `GUARD-KT-01` (MockK stub echoed unchanged), `GUARD-KT-02` (state asserted without advancing virtual time under `StandardTestDispatcher`), `GUARD-SWIFT-01` (Advisory: expectation timeout above 2.0s).
+- **Discovery**: Cypress `*.cy.ts`/`*.cy.js`, Playwright `*.e2e.ts`/`*.e2e.tsx`/`*.e2e.js`/`*.e2e-spec.ts`, and `.test.`/`.spec.` files with `.mjs .cjs .mts .cts` extensions are now scanned.
+- **Corpus Parity Gate**: the corpus test now fails when a rule is emitted that the catalog does not document, when an emitted severity differs from the documented severity, when a catalog rule has no true positive, when a catalog rule claims a language with no true-positive fixture, when an expected finding does not match on rule ID, severity, case-relative path and line, or when an ordinary case is not a complete analysis of at least one test. A skipped-only scope is asserted separately as `incomplete/empty_scope` with exit 2 so it cannot be mistaken for a clean pass.
+
+### Changed
+- **Severity Changes (behaviour change)**:
+  - `GUARD-UNIV-01` Duplicate Test Body: `Advisory` → `Warning`; scope-partitioned (tests in different groups are never clones) and the 2–3 literal-variant "Similar test structure" advisory is no longer emitted.
+  - `GUARD-GO-01` Domain Test Mock Usage: `Blocker` → `Advisory`; the message is a convention note, not a purity violation.
+  - `GUARD-NEST-02` Unmocked Database Module: `Blocker` → `Warning`; now file-level and reports the line of the database module import.
+  - `GUARD-KT-02` Unadvanced Coroutine Virtual Time: `Blocker` → `Warning`; now requires `runTest`, `StandardTestDispatcher` without `UnconfinedTestDispatcher`, dispatcher-injected subject, a call on it, and a `.value` state assertion with no virtual-time advancement. The old `search(`/`fetch(`/`debounce` keyword trigger is gone.
+  - `GUARD-SWIFT-01` Long Expectation Timeout: `Warning` → `Advisory`; the message now states that a long timeout only delays feedback when the test fails.
+- **Rule Accuracy**:
+  - `GUARD-TS-01` now means snapshot-only assertions (every assertion is `toMatchSnapshot`/`toMatchInlineSnapshot`/`toMatchFileSnapshot`), not a >50-line snapshot heuristic.
+  - `GUARD-UNIV-TAUTOLOGY` additionally catches identical identifiers or dotted member paths without calls, constant arithmetic, negated distinct literals, and the Kotlin/Swift equivalents.
+  - `GUARD-UNIV-SKIP` reports declaration-time skips only (`it.skip`, `test.fixme`, `skip: true`, `@Skip`, `@Ignore`/`@Disabled`, `throw XCTSkip`, `@Test(.disabled)`) and ignores conditional runtime skips.
+  - `GUARD-DART-SEED-ECHO` extracts top-level seed arguments with paren-depth tracking and reports nothing when any `.having` asserts a mutated field.
+  - `GUARD-DART-MOCK-ECHO` evaluates all `thenAnswer`/`thenReturn` stubs and all `expect` assertions, for both `Right` and `Left`.
+  - `GUARD-NEST-01` also catches the assigned-result form (`const r = await controller.m(); expect(r).toBe(mockValue)`).
+  - Dart adapter: `group(...)` scope is populated, and `verifyZeroInteractions`, `verifyNoMoreInteractions`, `fail`, and `expectAsync*` count as assertions.
+  - Go adapter: Gomega, Quicktest, external and package assertion helpers are recognized, so those tests no longer receive a false zero-assertion blocker.
+  - `GUARD-TS-CONDITIONAL-ASSERT` and `GUARD-TS-SELF-MOCK` no longer fire on exhaustive `if/else`/`switch`-with-`default`/ternary shapes, comment text, string literals, or a mock that only the system under test invokes.
+  - TypeScript/JavaScript discovery accepts an identifier, member-expression, call-expression, concatenated or template title (plus mocha `specify`) when a function-literal callback is supplied; the title is recorded as source text with `Meta["title_dynamic"]="true"` and `analysis.analyzed_tests` counts declaration sites, never evaluated runtime case counts. Local/shadowed `test`/`fit` functions, hooks, `test.use`/`setTimeout` and function/method declarations remain non-declarations.
+  - A named nested `function` inside a test is no longer filtered for reachability: its assertions are credited lexically, so callbacks, references, aliases, promise executors, JSX attribute handlers and JSX tag components never receive a false zero-assertion blocker. This replaces the abandoned "unreferenced function is inert" inference and removes the false-Blocker class outright. No execution-reachability guarantee is implied.
+  - Generic JSX elements with a balanced type-argument list before their attributes (`<Table<{ n: number }> … />`) are parsed instead of failing the file with `parse_failed`; a genuinely malformed generic element still fails closed.
+  - An imported or `require`-bound `fit` utility taking a callback is a call, not a focused-test declaration; a genuine global `fit('title', fn)` still analyses as one test and reports `GUARD-UNIV-FOCUS`. A dynamic `fit(name, fn)` is discovered but does not receive the focus warning (documented minor recall gap).
+  - `GUARD-UNIV-NAME` judges literal titles only: a unit whose adapter marked `title_dynamic` is not assessed on its unevaluated expression text, so `it(foo, …)` is not a placeholder finding while `it('foo', …)` remains one.
+  - Kotlin raw strings whose content ends in a quote (`"""ends with quote""""`, `"""\d+\s"(\w+)"""".toRegex()`) scan as valid literals instead of failing with `parse_failed`; a genuinely unterminated raw string still fails closed.
+- **Documentation**: `README.md`, `QUICKSTART.md`, `ARCHITECTURE.md`, and `testguard rules` now describe the rules the engine can actually emit, their real severities, the per-language adapter packages, and the required positive/negative corpus fixtures for a new rule.
+
+### Removed
+- **Removed Findings (behaviour change)**:
+  - `GUARD-REACT-01` Shallow Mock Text Echo: removed from the catalog; it had no detector and was never emitted.
+  - "Similar test structure" 2–3 variant Advisory from the clone detector (superseded by exact-body `GUARD-UNIV-01` and ≥4-variant `GUARD-UNIV-02`).
+- **Dead Code**: the generic regex parser in `pkg/engine/engine.go` (`parseGenericTestUnits`, the TS/Kotlin/Swift test regexes, the generic assertion regex, and the TS asserting-helper collector) is deleted now that real adapters own parsing.
+- **Misleading Help**: the `testguard --diff` example is gone from CLI help; the flag is still rejected at run time.
+
+### Limitations
+- Findings are static lexical/AST heuristics. A finding is not proof that a test is broken, and the absence of a finding is not proof that a test is effective. TestGuard does not execute tests, does not measure mutation scores, and makes no runtime mutation-effectiveness claim.
+- Assertion-helper resolution is one-hop and same-file only; helpers imported from another module are credited through naming and argument conventions at best.
+- The TypeScript, Kotlin, Swift and Dart adapters are lexical scanners, not full language parsers. They mask comments, raw/triple-quoted strings and nested interpolation before discovery. Unbalanced delimiters or an unterminated string/template/comment are reported as `parse_failed` by the TypeScript, Kotlin and Swift adapters; the Dart adapter reports only an unmatched test callback brace and lets an unterminated literal or block comment degrade to a smaller discovery set. Kotlin/Swift validate comments, literals and `()[]{}` only — angle-bracket generics are not balanced and a Swift bare regex literal is read as code. A construct outside the documented lexical model is not guaranteed to be understood.
+- Precision-first recall gaps are documented in `ARCHITECTURE.md` §8: assertion helpers resolve one hop and are block-scoped unless credited by naming convention, a locally shadowed `expect` is not credited, assertions inside nested functions are credited lexically with no execution-reachability guarantee, Playwright `test.fail('title', fn)` declarations are not discovered and implicit waits such as `page.waitForURL` are not credited as assertions, `GUARD-UNIV-ZERO` never fires on `blocTest`, Dart seed/mock echo only models `.having`/`Right`/`Left` shapes, `GUARD-KT-01` requires a property read rather than a direct stub call, and `GUARD-GO-01` does not recognise `go.uber.org/mock/gomock`.
+- Dart arrow-body tests are not discovered: `test('x', () => expect(add(1, 2), 3));` and hollow arrow bodies produce no unit and no diagnostic, so a pre-existing hollow arrow-body test is invisible. The rest of the file is still analysed. This limit is documented, not fixed in this change.
+- `GUARD-KT-02` cannot see a dispatcher configured in a base class in another file. `GUARD-GO-UNCHECKED-WANT` fails closed when the row type is declared in another file of the package. Cross-file resolution is out of scope for static per-file analysis.
+- Assertions inside nested functions are credited lexically with no execution-reachability guarantee. A genuinely unreferenced nested function containing assertions, including a typed-return or generic recursive-only helper, can hide a hollow test; TestGuard does not claim to catch that shape.
+- Scan cost grows quadratically with the number of tests in a single file. Measured on the reviewer machine: 5,000 tests ≈ 0.8 s, 10,000 ≈ 2.7 s, 20,000 ≈ 13 s. Realistic suites are far below this; no linear-scaling claim is made.
+- The corpus is a set of small synthetic fixtures that pin exact expected findings, severities, relative paths and lines. It measures regressions against those contracts; it does not establish real-world precision on production repositories.
+
+---
 ## [0.1.5] - 2026-10-28
 
 ### Removed

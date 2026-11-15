@@ -37,10 +37,17 @@ func New() *Detector {
 }
 
 // Check evaluates test unit names and reports vague or placeholder names.
+// Units whose adapter marked Meta["title_dynamic"]="true" carry the original
+// title expression source rather than an evaluated runtime string, so an
+// expression such as `it(foo, …)` may evaluate to a descriptive title and must
+// not be judged on its source text. Literal titles keep the placeholder check.
 func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 	var violations []models.Violation
 
 	for _, unit := range units {
+		if unit.Meta["title_dynamic"] == "true" {
+			continue
+		}
 		trimmed := strings.TrimSpace(unit.Name)
 		lower := strings.ToLower(trimmed)
 
