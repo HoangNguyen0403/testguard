@@ -10,11 +10,12 @@ import (
 )
 
 var (
-	uiExecutionRegex = regexp.MustCompile(`\b(render|renderHook|shallow|mount|screen\s*\.|fireEvent\s*\.|userEvent\s*\.)`)
+	uiExecutionRegex          = regexp.MustCompile(`\b(render|renderHook|shallow|mount|screen\s*\.|fireEvent\s*\.|userEvent\s*\.)`)
 	queryBuilderWithArgsRegex = regexp.MustCompile(`\b(?:build|create|generate)[A-Za-z0-9_]*(?:Query|Mutation|Subscription|Doc)\s*\(\s*[^)\s]`)
 	staticGqlPrintAssignRegex = regexp.MustCompile(`(?:const|let|var)\s+([A-Za-z0-9_$]+)\s*=\s*(?:print\s*\(|[^;\n]+\.loc(?:\.source)?\.body)`)
-	staticGqlSubjectRegex = regexp.MustCompile(`(?:\bprint\s*\(|\.loc(?:\.source)?\.body\b)`)
-	staticI18nRegex = regexp.MustCompile(`Object\.keys\s*\(|typeof\s+[^)]+\[[^\]]+\]`)
+	staticGqlSubjectRegex     = regexp.MustCompile(`(?:\bprint\s*\(|\.loc(?:\.source)?\.body\b)`)
+	staticI18nRegex           = regexp.MustCompile(`Object\.keys\s*\(|typeof\s+[^)]+\[[^\]]+\]`)
+	typeofRegex               = regexp.MustCompile(`typeof\s+`)
 )
 
 // StaticPinningRule detects unit tests that verify only static query strings or
@@ -76,7 +77,7 @@ func (r *StaticPinningRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			isPinnedAssert = true
 		} else if pinnedVars[a.Subject] {
 			isPinnedAssert = true
-		} else if isPatternB && (staticI18nRegex.MatchString(a.Raw) || staticI18nRegex.MatchString(a.Subject) || regexp.MustCompile(`typeof\s+`).MatchString(a.Subject)) {
+		} else if isPatternB && (staticI18nRegex.MatchString(a.Raw) || staticI18nRegex.MatchString(a.Subject) || typeofRegex.MatchString(a.Subject)) {
 			isPinnedAssert = true
 		}
 

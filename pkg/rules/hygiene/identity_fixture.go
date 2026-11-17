@@ -10,10 +10,10 @@ import (
 )
 
 var (
-	calcKeywordRegex = regexp.MustCompile(`(?i)\b(net|total|subtotal|price|amount|rebate|discount|fee|tax|surcharge|mov|bonus|calc|compute)\b`)
-	boundaryTitleRegex = regexp.MustCompile(`(?i)\b(zero|no[ _-](rebate|discount|fee|tax)|without|empty|free|exempt|waived|nil)\b`)
-	operandZeroRegex = regexp.MustCompile(`(?i)\b(?:with[_-]?)?(rebate|discount|fee|tax|surcharge|mov_threshold|offset)\b\s*(?::=|=|:|\()\s*(?:0(?:\.0+)?|['"]0(?:\.0+)?['"]|\.empty\(\)|[A-Za-z0-9_]+\.empty\(\))`)
-	operandNonZeroRegex = regexp.MustCompile(`(?i)\b(?:with[_-]?)?(rebate|discount|fee|tax|surcharge|mov_threshold|offset)\b\s*(?::=|=|:|\()\s*(?:[1-9][0-9]*(?:\.[0-9]+)?|['"][1-9][0-9]*(?:\.[0-9]+)?['"])`)
+	calcKeywordRegex       = regexp.MustCompile(`(?i)\b(net|total|subtotal|price|amount|rebate|discount|fee|tax|surcharge|mov|bonus|calc|compute)\b`)
+	boundaryTitleRegex     = regexp.MustCompile(`(?i)\b(zero|no[ _-](rebate|discount|fee|tax)|without|empty|free|exempt|waived|nil)\b`)
+	operandZeroRegex       = regexp.MustCompile(`(?i)\b(?:with[_-]?)?(rebate|discount|fee|tax|surcharge|mov_threshold|offset)\b\s*(?::=|=|:|\()\s*(?:0(?:\.0+)?|['"]0(?:\.0+)?['"]|\.empty\(\)|[A-Za-z0-9_]+\.empty\(\))`)
+	operandNonZeroRegex    = regexp.MustCompile(`(?i)\b(?:with[_-]?)?(rebate|discount|fee|tax|surcharge|mov_threshold|offset)\b\s*(?::=|=|:|\()\s*(?:[1-9][0-9]*(?:\.[0-9]+)?|['"][1-9][0-9]*(?:\.[0-9]+)?['"])`)
 	assertZeroOutcomeRegex = regexp.MustCompile(`(?i)(?:toBe|toEqual|equals|toStrictEqual|Equal)\s*\(\s*(?:0(?:\.0+)?|['"]0(?:\.0+)?['"]|t,\s*0(?:\.0+)?)\s*\)|assert\.Zero\b`)
 )
 

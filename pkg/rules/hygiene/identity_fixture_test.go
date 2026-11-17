@@ -12,10 +12,10 @@ func TestIdentityFixtureRule(t *testing.T) {
 	rule := hygiene.NewIdentityFixtureRule()
 
 	tests := []struct {
-		name      string
-		unit      parser.TestUnit
-		wantWarn  bool
-		wantLine  int
+		name     string
+		unit     parser.TestUnit
+		wantWarn bool
+		wantLine int
 	}{
 		{
 			name: "TypeScript $0 rebate in pricing test triggers warning",

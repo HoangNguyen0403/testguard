@@ -64,9 +64,9 @@ type Engine struct {
 	namingDetect *naming.Detector
 
 	// Universal hygiene rules
-	tautologyRule *hygiene.TautologyRule
-	skipRule      *hygiene.SkipRule
-	focusRule     *hygiene.FocusRule
+	tautologyRule       *hygiene.TautologyRule
+	skipRule            *hygiene.SkipRule
+	focusRule           *hygiene.FocusRule
 	identityFixtureRule *hygiene.IdentityFixtureRule
 
 	// E2E rules
@@ -79,10 +79,10 @@ type Engine struct {
 	vacuousStateRule  *dartrules.VacuousStateRule
 
 	// Go rules
-	domainPurityRule   *gorules.DomainPurityRule
-	tableDuplicateRule *gorules.TableDuplicateRule
-	swallowedErrorRule *gorules.SwallowedErrorRule
-	uncheckedWantRule  *gorules.UncheckedWantRule
+	domainPurityRule    *gorules.DomainPurityRule
+	tableDuplicateRule  *gorules.TableDuplicateRule
+	swallowedErrorRule  *gorules.SwallowedErrorRule
+	uncheckedWantRule   *gorules.UncheckedWantRule
 	goExistenceOnlyRule *gorules.ExistenceOnlyRule
 
 	// TypeScript / Fullstack rules
@@ -120,9 +120,9 @@ func New() *Engine {
 		cloneDetect:  clone.New(),
 		namingDetect: naming.New(),
 
-		tautologyRule: hygiene.NewTautologyRule(),
-		skipRule:      hygiene.NewSkipRule(),
-		focusRule:     hygiene.NewFocusRule(),
+		tautologyRule:       hygiene.NewTautologyRule(),
+		skipRule:            hygiene.NewSkipRule(),
+		focusRule:           hygiene.NewFocusRule(),
 		identityFixtureRule: hygiene.NewIdentityFixtureRule(),
 
 		hardWaitRule: e2e.NewHardWaitRule(),
@@ -132,10 +132,10 @@ func New() *Engine {
 		blocDuplicateRule: dartrules.NewBlocDuplicateRule(),
 		vacuousStateRule:  dartrules.NewVacuousStateRule(),
 
-		domainPurityRule:   gorules.NewDomainPurityRule(),
-		tableDuplicateRule: gorules.NewTableDuplicateRule(),
-		swallowedErrorRule: gorules.NewSwallowedErrorRule(),
-		uncheckedWantRule:  gorules.NewUncheckedWantRule(),
+		domainPurityRule:    gorules.NewDomainPurityRule(),
+		tableDuplicateRule:  gorules.NewTableDuplicateRule(),
+		swallowedErrorRule:  gorules.NewSwallowedErrorRule(),
+		uncheckedWantRule:   gorules.NewUncheckedWantRule(),
 		goExistenceOnlyRule: gorules.NewExistenceOnlyRule(),
 
 		nestControllerEchoRule: tsrules.NewNestControllerEchoRule(),
