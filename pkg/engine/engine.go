@@ -203,7 +203,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			report.Analysis.Status = "incomplete"
 			report.Analysis.Reason = "input_failure"
 			report.ExitCode = 2
-			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_failed", "", err.Error()))
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_unavailable", "", err.Error()))
 			return &Result{Report: report, Violations: report.Findings}, nil
 		}
 
@@ -216,31 +216,44 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			return &Result{Report: report, Violations: report.Findings}, nil
 		}
 
+		targetAbsPaths := make([]string, 0, len(paths))
+		for _, p := range paths {
+			absP, err := filepath.Abs(p)
+			if err == nil {
+				if evalP, err := filepath.EvalSymlinks(absP); err == nil {
+					absP = evalP
+				}
+				targetAbsPaths = append(targetAbsPaths, absP)
+			}
+		}
+
+		seenExcluded := make(map[string]bool)
 		for _, file := range diffFiles {
-			if len(opts.TargetPaths) > 0 && opts.TargetPaths[0] != "." {
-				match := false
-				for _, tp := range opts.TargetPaths {
-					absTp, err := filepath.Abs(tp)
-					if err != nil {
-						continue
-					}
-					if evalTp, err := filepath.EvalSymlinks(absTp); err == nil {
-						absTp = evalTp
-					}
-					checkFile := file
-					if evalFile, err := filepath.EvalSymlinks(file); err == nil {
-						checkFile = evalFile
-					}
-					if rel, err := filepath.Rel(absTp, checkFile); err == nil && !strings.HasPrefix(rel, "..") {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
+			evalFile, err := filepath.EvalSymlinks(file)
+			checkFile := file
+			if err == nil {
+				checkFile = evalFile
 			}
 
+			inTarget := false
+			for _, target := range targetAbsPaths {
+				rel, err := filepath.Rel(target, checkFile)
+				if err == nil && !strings.HasPrefix(rel, "..") {
+					inTarget = true
+					break
+				}
+			}
+			if !inTarget {
+				continue
+			}
+
+			if excluded, exclPath, reason := isExcludedDiffPath(repoRoot, file); excluded {
+				if !seenExcluded[exclPath] {
+					seenExcluded[exclPath] = true
+					report.Scope.Excluded = append(report.Scope.Excluded, models.ExcludedPath{Path: exclPath, Reason: reason})
+				}
+				continue
+			}
 			ext := filepath.Ext(file)
 			if !isSupportedLanguageExtension(ext) {
 				continue

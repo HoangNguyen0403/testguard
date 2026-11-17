@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/HoangNguyen0403/testguard/pkg/engine"
@@ -317,5 +318,113 @@ func TestSkipped(t *testing.T) {
 	}
 	if res2.Report.Policy.Status != "warning_found" {
 		t.Errorf("expected policy status 'warning_found', got %q", res2.Report.Policy.Status)
+	}
+}
+
+func TestDiff_ExcludedDirectoryFiltering(t *testing.T) {
+	repo := initGitRepo(t)
+
+	// Initial commit
+	initFile := filepath.Join(repo, "initial_test.go")
+	_ = os.WriteFile(initFile, []byte("package sample\nimport \"testing\"\nfunc TestInit(t *testing.T) {\n  if 1 != 1 { t.Fatal(\"err\") }\n}\n"), 0644)
+	runGit(t, repo, "add", "initial_test.go")
+	runGit(t, repo, "commit", "-m", "init")
+
+	// Create test files in excluded directories (node_modules, vendor, .hidden)
+	nmDir := filepath.Join(repo, "node_modules", "pkg")
+	_ = os.MkdirAll(nmDir, 0755)
+	_ = os.WriteFile(filepath.Join(nmDir, "hollow_test.go"), []byte("package sample\nfunc TestBad(t *testing.T) {}\n"), 0644)
+
+	hiddenDir := filepath.Join(repo, ".hidden")
+	_ = os.MkdirAll(hiddenDir, 0755)
+	_ = os.WriteFile(filepath.Join(hiddenDir, "hollow_test.go"), []byte("package sample\nfunc TestBad(t *testing.T) {}\n"), 0644)
+
+	vendorDir := filepath.Join(repo, "vendor", "mod")
+	_ = os.MkdirAll(vendorDir, 0755)
+	_ = os.WriteFile(filepath.Join(vendorDir, "hollow_test.go"), []byte("package sample\nfunc TestBad(t *testing.T) {}\n"), 0644)
+
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{repo},
+		DiffOnly:    true,
+		AllowEmpty:  true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected engine error: %v", err)
+	}
+
+	// Since all diffs are in excluded directories, no candidate test files remain
+	if res.Report.Analysis.AnalyzedFiles != 0 {
+		t.Errorf("expected 0 analyzed files, got %d (%v)", res.Report.Analysis.AnalyzedFiles, res.Report.Scope.Files)
+	}
+	if res.Report.ExitCode != 3 {
+		t.Errorf("expected exit code 3 (empty_allowed), got %d", res.Report.ExitCode)
+	}
+	if len(res.Report.Scope.Excluded) < 3 {
+		t.Errorf("expected at least 3 excluded directories, got %d (%v)", len(res.Report.Scope.Excluded), res.Report.Scope.Excluded)
+	}
+}
+
+func TestDiff_TargetPathScoping(t *testing.T) {
+	repo := initGitRepo(t)
+
+	initFile := filepath.Join(repo, "root_test.go")
+	_ = os.WriteFile(initFile, []byte("package sample\nimport \"testing\"\nfunc TestRoot(t *testing.T) {\n  if 1 != 1 { t.Fatal(\"err\") }\n}\n"), 0644)
+	runGit(t, repo, "add", "root_test.go")
+	runGit(t, repo, "commit", "-m", "init")
+
+	subDir := filepath.Join(repo, "sub")
+	_ = os.MkdirAll(subDir, 0755)
+	subHollow := filepath.Join(subDir, "sub_hollow_test.go")
+	_ = os.WriteFile(subHollow, []byte("package sub\nimport \"testing\"\nfunc TestSubHollow(t *testing.T) {\n  _ = 1 + 1\n}\n"), 0644)
+
+	otherDir := filepath.Join(repo, "other")
+	_ = os.MkdirAll(otherDir, 0755)
+	otherHollow := filepath.Join(otherDir, "other_hollow_test.go")
+	_ = os.WriteFile(otherHollow, []byte("package other\nimport \"testing\"\nfunc TestOtherHollow(t *testing.T) {\n  _ = 1 + 1\n}\n"), 0644)
+
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{subDir},
+		DiffOnly:    true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected engine error: %v", err)
+	}
+
+	if res.Report.Analysis.AnalyzedFiles != 1 {
+		t.Fatalf("expected 1 analyzed file scoped to subDir, got %d (%v)", res.Report.Analysis.AnalyzedFiles, res.Report.Scope.Files)
+	}
+	if !strings.Contains(res.Report.Scope.Files[0], "sub_hollow_test.go") {
+		t.Errorf("expected sub_hollow_test.go to be analyzed, got %s", res.Report.Scope.Files[0])
+	}
+}
+
+func TestDiff_GitUnavailableDiagnostic(t *testing.T) {
+	nonGitDir := t.TempDir()
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{nonGitDir},
+		DiffOnly:    true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected engine error: %v", err)
+	}
+
+	if res.Report.ExitCode != 2 {
+		t.Errorf("expected exit code 2, got %d", res.Report.ExitCode)
+	}
+	if res.Report.Analysis.Status != "incomplete" || res.Report.Analysis.Reason != "input_failure" {
+		t.Errorf("expected incomplete/input_failure, got %s/%s", res.Report.Analysis.Status, res.Report.Analysis.Reason)
+	}
+	foundDiag := false
+	for _, d := range res.Report.Diagnostics {
+		if d.Code == "git_unavailable" {
+			foundDiag = true
+			break
+		}
+	}
+	if !foundDiag {
+		t.Errorf("expected diagnostic with code 'git_unavailable', got %+v", res.Report.Diagnostics)
 	}
 }

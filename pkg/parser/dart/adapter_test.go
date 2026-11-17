@@ -798,3 +798,50 @@ func TestArrowBodyHollowTestFlaggedByZeroAssert(t *testing.T) {
 		t.Errorf("expected rule GUARD-UNIV-ZERO, got %s", violations[0].RuleID)
 	}
 }
+
+func TestArrowBodyGenericTypeArguments(t *testing.T) {
+	source := []byte(`
+void assertPair<A, B>(A a, B b) {
+  expect(a, isNotNull);
+}
+
+void main() {
+  test('generic pair', () => assertPair<String, int>('a', 1));
+  test('nested generics', () => verify<Future<Map<String, dynamic>>>(fetchData()));
+}
+`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "generic_arrow_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(units))
+	}
+
+	u1 := units[0]
+	if u1.Name != "generic pair" {
+		t.Errorf("expected name 'generic pair', got %q", u1.Name)
+	}
+	expectedBody1 := "assertPair<String, int>('a', 1)"
+	if u1.RawBody != expectedBody1 {
+		t.Errorf("expected RawBody %q, got %q", expectedBody1, u1.RawBody)
+	}
+	if len(u1.Assertions) != 1 || u1.Assertions[0] != "helper:assertPair" {
+		t.Errorf("expected assertions ['helper:assertPair'], got %v", u1.Assertions)
+	}
+
+	u2 := units[1]
+	if u2.Name != "nested generics" {
+		t.Errorf("expected name 'nested generics', got %q", u2.Name)
+	}
+	expectedBody2 := "verify<Future<Map<String, dynamic>>>(fetchData())"
+	if u2.RawBody != expectedBody2 {
+		t.Errorf("expected RawBody %q, got %q", expectedBody2, u2.RawBody)
+	}
+	if len(u2.Assertions) != 1 || u2.Assertions[0] != "verify" {
+		t.Errorf("expected assertions ['verify'], got %v", u2.Assertions)
+	}
+}

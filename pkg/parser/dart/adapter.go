@@ -195,6 +195,11 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 					continue
 				}
 				switch src[i] {
+				case '<':
+					if closeAngle := findMatchingAngleBracket(src, i); closeAngle != -1 && closeAngle < callCloseParen {
+						i = closeAngle + 1
+						continue
+					}
 				case '(':
 					parenDepth++
 				case ')':
@@ -253,6 +258,11 @@ func extractDartAssertions(body string, assertingHelpers map[string]bool, testNa
 			}
 			ident := body[start:i]
 			after := skipWhitespaceAndComments(body, i)
+			if after < len(body) && body[after] == '<' {
+				if closeAngle := findMatchingAngleBracket(body, after); closeAngle != -1 {
+					after = skipWhitespaceAndComments(body, closeAngle+1)
+				}
+			}
 			if after < len(body) && body[after] == '(' {
 				if isDirectAssertion(ident) {
 					assertions = append(assertions, ident)

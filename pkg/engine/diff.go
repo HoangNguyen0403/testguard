@@ -68,3 +68,27 @@ func CollectDiffFiles(repoRoot, baseRef string) ([]string, error) {
 	sort.Strings(result)
 	return result, nil
 }
+
+// isExcludedDiffPath reports whether absPath resides within a default excluded directory
+// (such as .git, hidden dirs, node_modules, vendor, third_party, build, dist, or linked worktrees).
+func isExcludedDiffPath(repoRoot, absPath string) (bool, string, string) {
+	rel, err := filepath.Rel(repoRoot, absPath)
+	if err != nil {
+		return false, "", ""
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Dir(rel)), "/")
+	current := repoRoot
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		if strings.HasPrefix(part, ".") || part == "node_modules" || part == "vendor" || part == "third_party" || part == "build" || part == "dist" {
+			return true, normalizePath(current), "default_directory"
+		}
+		if isLinkedGitWorktree(current) {
+			return true, normalizePath(current), "linked_worktree"
+		}
+	}
+	return false, "", ""
+}
