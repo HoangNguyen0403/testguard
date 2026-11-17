@@ -35,6 +35,9 @@ Run `testguard` inside any repository. It automatically discovers project types 
 # Full audit: Scan all test files across all modules (effective mode: full)
 testguard --all
 
+# Diff audit: Scan only git modified/untracked test files against base branch/ref
+testguard --diff --base origin/develop
+
 # Target a specific folder or single test file
 testguard path/to/module/test/
 
@@ -45,15 +48,15 @@ testguard --allow-empty path/to/empty/
 testguard --json > audit.json
 
 # Explain a specific rule and remediation steps
-testguard explain GUARD-DART-SEED-ECHO
+testguard explain GUARD-UNIV-IDENTITY-FIXTURE
 ```
 
 ### CLI Modes & Flags
 
 - **Full Scan Default**: Target directory or file inputs are audited in full (`effective_mode: "full"`).
-- **`--all` (`-a`)**: Force full scan across all candidate test files.
+- **`--all` (`-a`)**: Force full scan across all candidate test files. Mutually exclusive with `--diff`.
+- **`--diff` (`-d`)**: Scans only modified and untracked test files from git diff (`git diff --name-only`). Accepts `--base <ref>` (defaults to clean-repo fallback, e.g. `origin/main`, `origin/develop`, or `HEAD~1`). Exits `3` (`not_applicable`, reason: `empty_allowed`) when git diff contains no modified test files under `--allow-empty`.
 - **`--allow-empty`**: Permits scanning targets with zero analyzable test declarations. Without this flag, discovering zero test declarations is considered an incomplete scan (exit `2`, `empty_scope`). With `--allow-empty`, an empty scan with no findings produces exit `3` (`not_applicable / empty_allowed`).
-- **`--diff` (`-d`) Unsupported**: The `--diff` flag is not implemented and is explicitly rejected with exit `2` (`invalid_usage`). Scans operate in full target mode.
 - **Limiting Scope**: Pass explicit paths, e.g. `testguard path/to/module`. Linked git worktrees and `vendor/` / `third_party/` directories are skipped automatically. Repository configuration files are not applied; `scope.config_applied` is explicitly `false`. TestGuard relies entirely on zero-config automated discovery.
 - **Flag Compatibility Restrictions**:
   - **`--json` with `-f azure` is Rejected**: Combining `--json` with `-f azure` is invalid usage (exit `2`, `invalid_usage`). `--json` is compatible only with default console mode or explicit `-f json`.
@@ -67,7 +70,7 @@ TestGuard decouples analysis completeness from policy findings:
 |---|---|---|---|---|
 | `0` | **Passed** | `complete` | `no_blocker` | Nonempty analysis completed successfully; no blocker violations found (advisories/warnings may exist). |
 | `1` | **Blocker Found** | `complete` | `blocker_found` | Nonempty analysis completed successfully; at least one blocker violation detected. |
-| `2` | **Incomplete / Error** | `incomplete` or `error` | `no_blocker` or `blocker_found` | Incomplete analysis or usage error: `--diff` rejected, unreadable/missing paths, traversal/parse errors, unsupported file extension targets, or empty test scope without `--allow-empty`. Retained findings survive. |
+| `2` | **Incomplete / Error** | `incomplete` or `error` | `no_blocker` or `blocker_found` | Incomplete analysis or usage error: `--all` and `--diff` combined, unreadable/missing paths, traversal/parse errors, unsupported file extension targets, or empty test scope without `--allow-empty`. Retained findings survive. |
 | `3` | **Not Applicable** | `not_applicable` | `no_blocker` | Empty test scope explicitly authorized via `--allow-empty` with zero findings. **Exit 3 is not passed**; it signifies the check was inapplicable. |
 
 ### Machine-Readable JSON Output (`schema_version: 1`)
@@ -128,10 +131,10 @@ When run with `--json` or `-f json`, TestGuard outputs a versioned JSON envelope
 
 | Language / Scope | Test Runners | Key Guardrails |
 |---|---|---|
-| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), focused tests (`GUARD-UNIV-FOCUS`, TypeScript and Dart), exact duplicate test bodies (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), and placeholder test names (`GUARD-UNIV-NAME`). |
+| **Universal** | Polyglot | Zero assertions (`GUARD-UNIV-ZERO`), tautological assertions (`GUARD-UNIV-TAUTOLOGY`), committed skipped tests (`GUARD-UNIV-SKIP`), focused tests (`GUARD-UNIV-FOCUS`, TypeScript and Dart), exact duplicate test bodies (`GUARD-UNIV-01`), structural repetition (`GUARD-UNIV-02`), placeholder test names (`GUARD-UNIV-NAME`), and non-identity math & boundary fixtures (`GUARD-UNIV-IDENTITY-FIXTURE`). |
 | **Dart / Flutter** | `flutter_test`, `bloc_test` | Seed echoes (`GUARD-DART-SEED-ECHO`), vacuous base-state assertions (`GUARD-DART-VACUOUS-STATE`), identical whole-scenario BLoC duplicates (`GUARD-DART-BLOC-DUPLICATE`), and pass-through mock echoes (`GUARD-DART-MOCK-ECHO`). |
-| **Go** | `testing`, `testify`, `gomega`, `quicktest` | Domain-test mock usage as an advisory convention note (`GUARD-GO-01`), table-test duplicate input rows (`GUARD-GO-03`), swallowed errors via bare `return` (`GUARD-GO-SWALLOWED-ERR`), and declared-but-unread table expectations (`GUARD-GO-UNCHECKED-WANT`). |
-| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps in unit tests (`GUARD-REACT-02`), snapshot-only assertions (`GUARD-TS-01`), floating promise assertions (`GUARD-TS-FLOATING-ASSERT`), catch-only error paths (`GUARD-TS-CATCH-ONLY`), conditionally reached assertions (`GUARD-TS-CONDITIONAL-ASSERT`), existence-only oracles (`GUARD-TS-EXISTENCE-ONLY`), self-mocking assertions (`GUARD-TS-SELF-MOCK`), auto-mocked subjects (`GUARD-TS-MOCKED-SUT`), and NestJS controller echoes / unmocked database modules (`GUARD-NEST-01`, `GUARD-NEST-02`). |
+| **Go** | `testing`, `testify`, `gomega`, `quicktest` | Domain-test mock usage as an advisory convention note (`GUARD-GO-01`), table-test duplicate input rows (`GUARD-GO-03`), swallowed errors via bare `return` (`GUARD-GO-SWALLOWED-ERR`), declared-but-unread table expectations (`GUARD-GO-UNCHECKED-WANT`), and payload verification required (`GUARD-GO-EXISTENCE-ONLY`). |
+| **TypeScript / Web** | `jest`, `vitest` | Real-timer sleeps in unit tests (`GUARD-REACT-02`), snapshot-only assertions (`GUARD-TS-01`), floating promise assertions (`GUARD-TS-FLOATING-ASSERT`), catch-only error paths (`GUARD-TS-CATCH-ONLY`), conditionally reached assertions (`GUARD-TS-CONDITIONAL-ASSERT`), existence-only oracles (`GUARD-TS-EXISTENCE-ONLY`), self-mocking assertions (`GUARD-TS-SELF-MOCK`), auto-mocked subjects (`GUARD-TS-MOCKED-SUT`), static GraphQL AST / JSON key pinning ban (`GUARD-TS-STATIC-PINNING`), twin `.test.js` + `.test.ts` file ban (`GUARD-TS-DUAL-EXT`), and NestJS controller echoes / unmocked database modules (`GUARD-NEST-01`, `GUARD-NEST-02`). |
 | **E2E / Integration** | `Playwright`, `Flutter IntegrationTest` | Fixed arbitrary hard waits in end-to-end tests (`GUARD-E2E-01`). |
 | **Mobile (Android/iOS)** | `MockK`, `XCTest` | MockK pass-through echoes (`GUARD-KT-01`), unadvanced coroutine virtual time under `StandardTestDispatcher` (`GUARD-KT-02`), and long expectation timeouts (`GUARD-SWIFT-01`). |
 

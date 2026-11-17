@@ -122,6 +122,17 @@ var catalog = map[string]RuleDoc{
 		GoodExample:  "FetchCart_WhenTokenExpired_EmitsUnauthorizedFailureState",
 		BadExample:   "test('test 1', () { ... })",
 	},
+	"GUARD-UNIV-IDENTITY-FIXTURE": {
+		ID:           "GUARD-UNIV-IDENTITY-FIXTURE",
+		Title:        "Non-Identity Math & Boundary Fixture",
+		Severity:     models.SeverityWarning,
+		Languages:    []string{"Dart", "TypeScript", "Go"},
+		Description:  "A calculation, pricing, discount, rebate, fee, or tax test binds active operands to zero or identity values while asserting a non-zero business outcome.",
+		WhyItMatters: "Binding operands to zero (e.g. $0 discount or 0% fee) causes additive and multiplicative logic errors to pass undetected.",
+		Remediation:  "Bind calculation operands to realistic non-zero values to ensure calculation logic is actively tested.",
+		GoodExample:  "const rebate = 15;\nconst total = calculateTotal({ price: 100, rebate });\nexpect(total).toBe(85);",
+		BadExample:   "const rebate = 0;\nconst total = calculateTotal({ price: 100, rebate });\nexpect(total).toBe(100);",
+	},
 
 	// ── 2. Dart / Flutter Mobile Rules ──
 	"GUARD-DART-SEED-ECHO": {
@@ -213,6 +224,17 @@ var catalog = map[string]RuleDoc{
 		Remediation:  "Assert the expected field in the loop body, or delete the dead field from the row struct.",
 		GoodExample:  "if (err != nil) != tt.wantErr { t.Fatalf(\"err=%v, wantErr=%v\", err, tt.wantErr) }",
 		BadExample:   "got, _ := Calculate(tt.in)\nassert.Equal(t, tt.want, got) // tt.wantErr declared but never checked",
+	},
+	"GUARD-GO-EXISTENCE-ONLY": {
+		ID:           "GUARD-GO-EXISTENCE-ONLY",
+		Title:        "Payload Verification Required",
+		Severity:     models.SeverityWarning,
+		Languages:    []string{"Go"},
+		Description:  "A multi-return production call (T, error) is verified only for error presence and non-nil existence without asserting on returned payload fields.",
+		WhyItMatters: "Checking only err == nil and res != nil leaves data corruption, incorrect fields, and empty structs undetected.",
+		Remediation:  "Assert returned payload fields, state, or invariants rather than checking only err == nil and result != nil.",
+		GoodExample:  "user, err := svc.GetUser(ctx, 123)\nrequire.NoError(t, err)\nassert.Equal(t, \"Alice\", user.Name)",
+		BadExample:   "user, err := svc.GetUser(ctx, 123)\nassert.NoError(t, err)\nassert.NotNil(t, user)",
 	},
 
 	// ── 4. NestJS Backend Rules ──
@@ -340,6 +362,28 @@ var catalog = map[string]RuleDoc{
 		Remediation:  "Mock only the SUT's external dependencies, never the SUT itself.",
 		GoodExample:  "jest.mock('./externalApi'); // SUT itself stays real",
 		BadExample:   "jest.mock('./userService'); // file also imports UserService from './userService'",
+	},
+	"GUARD-TS-STATIC-PINNING": {
+		ID:           "GUARD-TS-STATIC-PINNING",
+		Title:        "Ban on Static GQL AST / JSON Introspection",
+		Severity:     models.SeverityWarning,
+		Languages:    []string{"TypeScript"},
+		Description:  "Every assertion in the test verifies only static GraphQL document strings (print(GQL)) or translation JSON keys without executing runtime logic.",
+		WhyItMatters: "Asserting static AST strings or JSON schema keys tests static artifacts rather than runtime application behavior.",
+		Remediation:  "Test the component, hook, or query-builder consuming the query/translations instead of asserting static document AST or JSON key schemas.",
+		GoodExample:  "render(<UserProfile query={GET_USER_QUERY} />);\nexpect(screen.getByText('Alice')).toBeInTheDocument();",
+		BadExample:   "const str = print(GET_USER_QUERY);\nexpect(str).toContain('userId');",
+	},
+	"GUARD-TS-DUAL-EXT": {
+		ID:           "GUARD-TS-DUAL-EXT",
+		Title:        "Ban on Twin .test.js + .test.ts Files",
+		Severity:     models.SeverityWarning,
+		Languages:    []string{"TypeScript"},
+		Description:  "A legacy JavaScript test file coexists with a TypeScript test file for the same stem in the same directory.",
+		WhyItMatters: "Twin test files split test suites, cause duplicate runs, and allow legacy suites to rot alongside TypeScript migrations.",
+		Remediation:  "Consolidate tests into the TypeScript test file and delete the legacy JavaScript test file.",
+		GoodExample:  "src/components/Button.test.tsx (alone without Button.test.jsx)",
+		BadExample:   "src/components/Button.test.js coexisting with Button.test.tsx",
 	},
 
 	// ── 7. Native Mobile Rules (Android & iOS) ──

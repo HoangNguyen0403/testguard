@@ -67,6 +67,7 @@ type Engine struct {
 	tautologyRule *hygiene.TautologyRule
 	skipRule      *hygiene.SkipRule
 	focusRule     *hygiene.FocusRule
+	identityFixtureRule *hygiene.IdentityFixtureRule
 
 	// E2E rules
 	hardWaitRule *e2e.HardWaitRule
@@ -82,6 +83,7 @@ type Engine struct {
 	tableDuplicateRule *gorules.TableDuplicateRule
 	swallowedErrorRule *gorules.SwallowedErrorRule
 	uncheckedWantRule  *gorules.UncheckedWantRule
+	goExistenceOnlyRule *gorules.ExistenceOnlyRule
 
 	// TypeScript / Fullstack rules
 	nestControllerEchoRule *tsrules.NestControllerEchoRule
@@ -93,7 +95,9 @@ type Engine struct {
 	existenceOnlyRule      *tsrules.ExistenceOnlyRule
 	selfMockRule           *tsrules.SelfMockRule
 	mockedSutRule          *tsrules.MockedSutRule
+	staticPinningRule      *tsrules.StaticPinningRule
 	reactSleepRule         *tsrules.ReactSleepRule
+	dualExtRule            *tsrules.DualExtRule
 
 	// Native Mobile rules
 	kotlinCoroutineRule *mobilerules.KotlinCoroutineAdvanceRule
@@ -119,6 +123,7 @@ func New() *Engine {
 		tautologyRule: hygiene.NewTautologyRule(),
 		skipRule:      hygiene.NewSkipRule(),
 		focusRule:     hygiene.NewFocusRule(),
+		identityFixtureRule: hygiene.NewIdentityFixtureRule(),
 
 		hardWaitRule: e2e.NewHardWaitRule(),
 
@@ -131,6 +136,7 @@ func New() *Engine {
 		tableDuplicateRule: gorules.NewTableDuplicateRule(),
 		swallowedErrorRule: gorules.NewSwallowedErrorRule(),
 		uncheckedWantRule:  gorules.NewUncheckedWantRule(),
+		goExistenceOnlyRule: gorules.NewExistenceOnlyRule(),
 
 		nestControllerEchoRule: tsrules.NewNestControllerEchoRule(),
 		nestUnmockedDbRule:     tsrules.NewNestUnmockedDbModuleRule(),
@@ -142,6 +148,8 @@ func New() *Engine {
 		selfMockRule:           tsrules.NewSelfMockRule(),
 		mockedSutRule:          tsrules.NewMockedSutRule(),
 		reactSleepRule:         tsrules.NewReactSleepRule(),
+		staticPinningRule:      tsrules.NewStaticPinningRule(),
+		dualExtRule:            tsrules.NewDualExtRule(),
 
 		kotlinCoroutineRule: mobilerules.NewKotlinCoroutineAdvanceRule(),
 		kotlinMockEchoRule:  mobilerules.NewKotlinMockEchoRule(),
@@ -297,6 +305,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	analyzedFiles := make([]string, 0)
 	failedFilesMap := make(map[string]bool)
 	var totalAnalyzedTests int
+	e.dualExtRule.SetScannedFiles(allTestFiles)
 
 	for i, file := range allTestFiles {
 		if opts.ProgressFn != nil {
@@ -363,6 +372,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 		for _, u := range units {
 			if u.Kind == "unit" || u.Kind == "bloc" {
 				fileViolations = append(fileViolations, e.tautologyRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.identityFixtureRule.Evaluate(u)...)
 			}
 		}
 		fileViolations = append(fileViolations, e.skipRule.CheckFile(file, src)...)
@@ -392,10 +402,12 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				fileViolations = append(fileViolations, e.tableDuplicateRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.swallowedErrorRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.uncheckedWantRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.goExistenceOnlyRule.Evaluate(u)...)
 			}
 		case "typescript":
 			fileViolations = append(fileViolations, e.nestUnmockedDbRule.EvaluateFile(file, src, units)...)
 			fileViolations = append(fileViolations, e.mockedSutRule.EvaluateFile(file, src, units)...)
+			fileViolations = append(fileViolations, e.dualExtRule.EvaluateFile(file, src, units)...)
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.nestControllerEchoRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.floatingAssertRule.Evaluate(u)...)
@@ -405,6 +417,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				fileViolations = append(fileViolations, e.selfMockRule.Evaluate(u)...)
 				if !isE2E {
 					fileViolations = append(fileViolations, e.snapshotOnlyRule.Evaluate(u)...)
+					fileViolations = append(fileViolations, e.staticPinningRule.Evaluate(u)...)
 				}
 			}
 			if isE2E {
