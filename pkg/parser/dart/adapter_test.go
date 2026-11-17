@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HoangNguyen0403/testguard/pkg/detectors/zeroassert"
 	"github.com/HoangNguyen0403/testguard/pkg/parser/dart"
 )
 
@@ -711,5 +712,89 @@ func TestLocateTests_BlocStateTypeMeta(t *testing.T) {
 	// Untyped blocTest
 	if units[1].Meta != nil && units[1].Meta[dart.MetaBlocStateType] != "" {
 		t.Errorf("expected untyped Meta[%q] to be empty, got %+v", dart.MetaBlocStateType, units[1].Meta)
+	}
+}
+
+func TestArrowBodyTestDiscovery(t *testing.T) {
+	source := []byte(`void main() {
+  test('calc', () => expect(1, 1));
+  testWidgets('render', (tester) async => await tester.pump());
+}`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "calc_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d", len(units))
+	}
+
+	u1 := units[0]
+	if u1.Name != "calc" {
+		t.Errorf("expected name 'calc', got %q", u1.Name)
+	}
+	if u1.StartLine != 2 {
+		t.Errorf("expected start line 2, got %d", u1.StartLine)
+	}
+	if u1.EndLine != 2 {
+		t.Errorf("expected end line 2, got %d", u1.EndLine)
+	}
+	if u1.RawBody != "expect(1, 1)" {
+		t.Errorf("expected RawBody 'expect(1, 1)', got %q", u1.RawBody)
+	}
+	if len(u1.Assertions) != 1 || u1.Assertions[0] != "expect" {
+		t.Errorf("expected assertions ['expect'], got %v", u1.Assertions)
+	}
+
+	u2 := units[1]
+	if u2.Name != "render" {
+		t.Errorf("expected name 'render', got %q", u2.Name)
+	}
+	if u2.StartLine != 3 {
+		t.Errorf("expected start line 3, got %d", u2.StartLine)
+	}
+	if u2.EndLine != 3 {
+		t.Errorf("expected end line 3, got %d", u2.EndLine)
+	}
+	if u2.RawBody != "await tester.pump()" {
+		t.Errorf("expected RawBody 'await tester.pump()', got %q", u2.RawBody)
+	}
+}
+
+func TestArrowBodyHollowTestFlaggedByZeroAssert(t *testing.T) {
+	source := []byte(`void main() {
+  test('hollow', () => 1 + 1);
+}`)
+
+	adapter := dart.NewAdapter()
+	units, err := adapter.LocateTests(source, "hollow_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+
+	u := units[0]
+	if u.Name != "hollow" {
+		t.Errorf("expected name 'hollow', got %q", u.Name)
+	}
+	if u.RawBody != "1 + 1" {
+		t.Errorf("expected RawBody '1 + 1', got %q", u.RawBody)
+	}
+	if len(u.Assertions) != 0 {
+		t.Errorf("expected 0 assertions, got %v", u.Assertions)
+	}
+
+	detector := zeroassert.New()
+	violations := detector.Check(units)
+	if len(violations) != 1 {
+		t.Fatalf("expected 1 violation from zeroassert, got %d", len(violations))
+	}
+	if violations[0].RuleID != "GUARD-UNIV-ZERO" {
+		t.Errorf("expected rule GUARD-UNIV-ZERO, got %s", violations[0].RuleID)
 	}
 }

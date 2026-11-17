@@ -11,7 +11,7 @@ import (
 
 var (
 	blocTestHeaderRegex = regexp.MustCompile(`(?s)\bblocTest\s*(?:<[^>]+>)?\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,`)
-	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?\{)`)
+	unitTestHeaderRegex = regexp.MustCompile(`(?s)\b(?:test|testWidgets)\s*\(\s*(?:"((?:\\.|[^"])+)"|'((?:\\.|[^'])+)')\s*,\s*(\(.*?\)\s*(?:async\*?\s*)?(\{|=>))`)
 	seedRegex           = regexp.MustCompile(`(?s)\bseed\s*:\s*\(\)\s*=>\s*([^,]+),`)
 	actRegex            = regexp.MustCompile(`(?s)\bact\s*:\s*\([^)]*\)\s*(?:=>|\{)\s*(.*?)(?:,\s*\w+\s*:|\}\s*,|\);)`)
 	expectRegex         = regexp.MustCompile(`(?s)\bexpect\s*:\s*\(\)\s*=>\s*(\[.*?\])\s*,`)
@@ -145,62 +145,129 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		} else {
 			testName = src[offset+loc[4] : offset+loc[5]]
 		}
+		bodyType := src[offset+loc[8] : offset+loc[9]]
+		if bodyType == "{" {
+			cbStart := offset + loc[6]
+			openBrace := offset + loc[8]
 
-		cbStart := offset + loc[6]
-		openBrace := offset + loc[7] - 1
+			closeBrace := findMatchingBrace(src, openBrace)
+			if closeBrace == -1 {
+				return nil, fmt.Errorf("malformed test callback: unmatched brace in %s starting at line %d", filePath, offsetToLine(openBrace))
+			}
 
-		closeBrace := findMatchingBrace(src, openBrace)
-		if closeBrace == -1 {
-			return nil, fmt.Errorf("malformed test callback: unmatched brace in %s starting at line %d", filePath, offsetToLine(openBrace))
-		}
+			body := src[cbStart : closeBrace+1]
+			assertions := extractDartAssertions(body, assertingHelpers, testName)
 
-		body := src[cbStart : closeBrace+1]
+			unit := parser.TestUnit{
+				Name:       testName,
+				FilePath:   filePath,
+				StartLine:  offsetToLine(offset + loc[0]),
+				EndLine:    offsetToLine(closeBrace),
+				Kind:       "unit",
+				RawBody:    body,
+				Assertions: assertions,
+				Scope:      computeScope(groups, offset+loc[0]),
+			}
 
-		var assertions []string
-		// Scan body for direct assertions and calls to asserting local helpers
-		for i := 0; i < len(body); {
-			next := skipCommentsAndStrings(body, i)
-			if next != i {
-				i = next
+			units = append(units, unit)
+			offset = closeBrace + 1
+		} else {
+			callOpenParenRel := strings.Index(masked[offset+loc[0]:], "(")
+			if callOpenParenRel == -1 {
+				offset += loc[1]
 				continue
 			}
-			if isIdentStart(body[i]) {
-				start := i
-				for i < len(body) && isIdentPart(body[i]) {
-					i++
+			callOpenParen := offset + loc[0] + callOpenParenRel
+			callCloseParen := findMatchingParen(src, callOpenParen)
+			if callCloseParen == -1 {
+				return nil, fmt.Errorf("malformed test callback: unmatched paren in %s starting at line %d", filePath, offsetToLine(callOpenParen))
+			}
+
+			exprStart := offset + loc[9]
+			exprEnd := callCloseParen
+			parenDepth := 0
+			braceDepth := 0
+			bracketDepth := 0
+			for i := exprStart; i < callCloseParen; {
+				next := skipCommentsAndStrings(src, i)
+				if next != i {
+					i = next
+					continue
 				}
-				ident := body[start:i]
-				after := skipWhitespaceAndComments(body, i)
-				if after < len(body) && body[after] == '(' {
-					if isDirectAssertion(ident) {
-						assertions = append(assertions, ident)
-					} else if assertingHelpers[ident] && ident != testName {
-						shadowRe := regexp.MustCompile(`(?:\b(?:var|final|const)\s+` + regexp.QuoteMeta(ident) + `\b|\b` + regexp.QuoteMeta(ident) + `\s*=)`)
-						if !shadowRe.MatchString(stripCommentsAndStrings(body)) {
-							assertions = append(assertions, "helper:"+ident)
-						}
+				switch src[i] {
+				case '(':
+					parenDepth++
+				case ')':
+					parenDepth--
+				case '{':
+					braceDepth++
+				case '}':
+					braceDepth--
+				case '[':
+					bracketDepth++
+				case ']':
+					bracketDepth--
+				case ',':
+					if parenDepth == 0 && braceDepth == 0 && bracketDepth == 0 {
+						exprEnd = i
+						goto foundComma
 					}
 				}
-				continue
+				i++
 			}
-			i++
-		}
+		foundComma:
 
-		unit := parser.TestUnit{
-			Name:       testName,
-			FilePath:   filePath,
-			StartLine:  offsetToLine(offset + loc[0]),
-			Kind:       "unit",
-			RawBody:    body,
-			Assertions: assertions,
-			Scope:      computeScope(groups, offset+loc[0]),
-		}
+			rawExpr := strings.TrimSpace(src[exprStart:exprEnd])
+			assertions := extractDartAssertions(rawExpr, assertingHelpers, testName)
 
-		units = append(units, unit)
-		offset = closeBrace + 1
+			unit := parser.TestUnit{
+				Name:       testName,
+				FilePath:   filePath,
+				StartLine:  offsetToLine(offset + loc[0]),
+				EndLine:    offsetToLine(callCloseParen),
+				Kind:       "unit",
+				RawBody:    rawExpr,
+				Assertions: assertions,
+				Scope:      computeScope(groups, offset+loc[0]),
+			}
+
+			units = append(units, unit)
+			offset = callCloseParen + 1
+		}
 	}
-
 	return units, nil
+}
+
+func extractDartAssertions(body string, assertingHelpers map[string]bool, testName string) []string {
+	var assertions []string
+	for i := 0; i < len(body); {
+		next := skipCommentsAndStrings(body, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if isIdentStart(body[i]) {
+			start := i
+			for i < len(body) && isIdentPart(body[i]) {
+				i++
+			}
+			ident := body[start:i]
+			after := skipWhitespaceAndComments(body, i)
+			if after < len(body) && body[after] == '(' {
+				if isDirectAssertion(ident) {
+					assertions = append(assertions, ident)
+				} else if assertingHelpers[ident] && ident != testName {
+					shadowRe := regexp.MustCompile(`(?:\b(?:var|final|const)\s+` + regexp.QuoteMeta(ident) + `\b|\b` + regexp.QuoteMeta(ident) + `\s*=)`)
+					if !shadowRe.MatchString(stripCommentsAndStrings(body)) {
+						assertions = append(assertions, "helper:"+ident)
+					}
+				}
+			}
+			continue
+		}
+		i++
+	}
+	return assertions
 }
 
 var forbiddenHelpers = map[string]bool{

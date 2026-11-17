@@ -155,6 +155,8 @@ func main() {
 	var diffMode bool
 	var allMode bool
 	var allowEmpty bool
+	var baseBranch string
+	var failOnWarning bool
 	var jsonMode bool
 	var format string
 	var outputFile string
@@ -187,10 +189,9 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			isJSON := jsonMode || format == "json"
 
-			if diffMode {
-				emitCLIError(isJSON, "--diff mode is not supported; use full scan", args, version, commit, date)
+			if diffMode && allMode {
+				emitCLIError(isJSON, "--all and --diff cannot be used together", args, version, commit, date)
 			}
-
 			if jsonMode && format == "azure" {
 				emitCLIError(true, "--json cannot be combined with -f azure", args, version, commit, date)
 			}
@@ -204,13 +205,15 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 			eng := engine.New()
 
 			opts := engine.Options{
-				TargetPaths: args,
-				DiffOnly:    diffMode,
-				ScanAll:     allMode,
-				AllowEmpty:  allowEmpty,
-				Version:     version,
-				Commit:      commit,
-				Date:        date,
+				TargetPaths:   args,
+				DiffOnly:      diffMode,
+				ScanAll:       allMode,
+				AllowEmpty:    allowEmpty,
+				BaseBranch:    baseBranch,
+				FailOnWarning: failOnWarning,
+				Version:       version,
+				Commit:        commit,
+				Date:          date,
 			}
 
 			var progress *reporter.ProgressReporter
@@ -279,8 +282,10 @@ Issues:  https://github.com/HoangNguyen0403/testguard/issues`,
 	}
 
 	// Flags
-	rootCmd.Flags().BoolVarP(&diffMode, "diff", "d", false, "Scan only modified test files against base branch (unsupported)")
+	rootCmd.Flags().BoolVarP(&diffMode, "diff", "d", false, "Scan only modified test files against base branch")
 	rootCmd.Flags().BoolVarP(&allMode, "all", "a", false, "Scan all test files in the workspace")
+	rootCmd.Flags().StringVar(&baseBranch, "base", "", "Base git revision for diff comparison (e.g. origin/main, HEAD~1)")
+	rootCmd.Flags().BoolVar(&failOnWarning, "fail-on-warning", false, "Exit with code 1 if warnings are found, even without blockers")
 	rootCmd.Flags().BoolVar(&allowEmpty, "allow-empty", false, "Allow empty test scope (exit 3 not_applicable)")
 	rootCmd.Flags().BoolVar(&jsonMode, "json", false, "Output machine-readable JSON (equivalent to -f json)")
 	rootCmd.Flags().StringVarP(&format, "format", "f", "console", "Output format: console, json, azure")

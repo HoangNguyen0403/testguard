@@ -30,15 +30,16 @@ type ProgressFunc func(phase string, current, total int, currentFile string)
 
 // Options configures the engine audit run.
 type Options struct {
-	TargetPaths []string
-	DiffOnly    bool
-	ScanAll     bool
-	AllowEmpty  bool
-	BaseBranch  string
-	ProgressFn  ProgressFunc
-	Version     string
-	Commit      string
-	Date        string
+	TargetPaths   []string
+	DiffOnly      bool
+	ScanAll       bool
+	AllowEmpty    bool
+	BaseBranch    string
+	FailOnWarning bool
+	ProgressFn    ProgressFunc
+	Version       string
+	Commit        string
+	Date          string
 
 	// Fault injection hooks for testing OS permission / traversal / read errors
 	FailTraversal func(path string) error
@@ -173,34 +174,113 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	}
 	report.Scope.RequestedPaths = append([]string(nil), paths...)
 
-	if opts.DiffOnly {
+	if opts.ScanAll && opts.DiffOnly {
 		report.Analysis.Status = "error"
 		report.Analysis.Reason = "invalid_usage"
 		report.ExitCode = 2
-		report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("invalid_usage", "", "--diff mode is not supported; use full scan"))
+		report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("invalid_usage", "", "--all and --diff cannot be used together"))
 		return &Result{
 			Report:     report,
 			Violations: report.Findings,
 		}, nil
 	}
 
-	if opts.ProgressFn != nil {
-		opts.ProgressFn("discovering", 0, 0, "")
+	var allTestFiles []string
+	var discoveredFiles int
+	hasInputFailure := false
+
+	if opts.DiffOnly {
+		report.Scope.EffectiveMode = "diff"
+		repoDir := "."
+		if len(paths) > 0 && paths[0] != "" {
+			repoDir = paths[0]
+		}
+		if fi, err := os.Stat(repoDir); err == nil && !fi.IsDir() {
+			repoDir = filepath.Dir(repoDir)
+		}
+		repoRoot, err := ResolveGitRepoRoot(repoDir)
+		if err != nil {
+			report.Analysis.Status = "incomplete"
+			report.Analysis.Reason = "input_failure"
+			report.ExitCode = 2
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_failed", "", err.Error()))
+			return &Result{Report: report, Violations: report.Findings}, nil
+		}
+
+		diffFiles, err := CollectDiffFiles(repoRoot, opts.BaseBranch)
+		if err != nil {
+			report.Analysis.Status = "incomplete"
+			report.Analysis.Reason = "input_failure"
+			report.ExitCode = 2
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_diff_failed", "", err.Error()))
+			return &Result{Report: report, Violations: report.Findings}, nil
+		}
+
+		for _, file := range diffFiles {
+			if len(opts.TargetPaths) > 0 && opts.TargetPaths[0] != "." {
+				match := false
+				for _, tp := range opts.TargetPaths {
+					absTp, err := filepath.Abs(tp)
+					if err != nil {
+						continue
+					}
+					if evalTp, err := filepath.EvalSymlinks(absTp); err == nil {
+						absTp = evalTp
+					}
+					checkFile := file
+					if evalFile, err := filepath.EvalSymlinks(file); err == nil {
+						checkFile = evalFile
+					}
+					if rel, err := filepath.Rel(absTp, checkFile); err == nil && !strings.HasPrefix(rel, "..") {
+						match = true
+						break
+					}
+				}
+				if !match {
+					continue
+				}
+			}
+
+			ext := filepath.Ext(file)
+			if !isSupportedLanguageExtension(ext) {
+				continue
+			}
+			if !isTestFileName(filepath.Base(file)) {
+				continue
+			}
+
+			discoveredFiles++
+
+			header := make([]byte, 256)
+			if f, oerr := os.Open(file); oerr == nil {
+				_, _ = f.Read(header)
+				f.Close()
+			}
+			if isGeneratedByAdapter(e.adapters, file, header) {
+				norm := normalizePath(file)
+				report.Scope.Excluded = append(report.Scope.Excluded, models.ExcludedPath{Path: norm, Reason: "generated"})
+				continue
+			}
+
+			allTestFiles = append(allTestFiles, file)
+		}
+	} else {
+		if opts.ProgressFn != nil {
+			opts.ProgressFn("discovering", 0, 0, "")
+		}
+
+		discovery := DiscoverScope(paths, e.adapters, opts.FailTraversal)
+		report.Scope.Excluded = discovery.Excluded
+		report.Scope.Unsupported = discovery.Unsupported
+		report.Diagnostics = append(report.Diagnostics, discovery.Diagnostics...)
+		discoveredFiles = discovery.DiscoveredFiles
+		hasInputFailure = discovery.InputFailure
+		allTestFiles = discovery.CandidateFiles
 	}
-
-	discovery := DiscoverScope(paths, e.adapters, opts.FailTraversal)
-	report.Scope.Excluded = discovery.Excluded
-	report.Scope.Unsupported = discovery.Unsupported
-	report.Diagnostics = append(report.Diagnostics, discovery.Diagnostics...)
-	discoveredFiles := discovery.DiscoveredFiles
-	hasInputFailure := discovery.InputFailure
-
-	allTestFiles := discovery.CandidateFiles
 
 	if opts.ProgressFn != nil {
 		opts.ProgressFn("discovered", len(allTestFiles), len(allTestFiles), "")
 	}
-
 	analyzedFiles := make([]string, 0)
 	failedFilesMap := make(map[string]bool)
 	var totalAnalyzedTests int
@@ -347,14 +427,20 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	report.Analysis.FailedFiles = len(failedFilesMap)
 
 	blockerCount := 0
+	warningCount := 0
 	for _, f := range report.Findings {
-		if f.Severity == models.SeverityBlocker {
+		switch f.Severity {
+		case models.SeverityBlocker:
 			blockerCount++
+		case models.SeverityWarning:
+			warningCount++
 		}
 	}
 	report.Policy.BlockerCount = blockerCount
 	if blockerCount > 0 {
 		report.Policy.Status = "blocker_found"
+	} else if opts.FailOnWarning && warningCount > 0 {
+		report.Policy.Status = "warning_found"
 	} else {
 		report.Policy.Status = "no_blocker"
 	}
@@ -388,6 +474,8 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 		report.Analysis.Status = "complete"
 		report.Analysis.Reason = "analyzed"
 		if blockerCount > 0 {
+			report.ExitCode = 1
+		} else if opts.FailOnWarning && warningCount > 0 {
 			report.ExitCode = 1
 		} else {
 			report.ExitCode = 0

@@ -502,16 +502,17 @@ func TestEngineDeterministicFaultInjection(t *testing.T) {
 	}
 }
 
-func TestEngineDiffModeRejected(t *testing.T) {
+func TestEngineDiffModeMutualExclusion(t *testing.T) {
 	eng := engine.New()
 	res, err := eng.Run(engine.Options{
+		ScanAll:  true,
 		DiffOnly: true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.Report.Analysis.Status != "error" || res.Report.Analysis.Reason != "invalid_usage" || res.Report.ExitCode != 2 {
-		t.Errorf("expected error/invalid_usage/exit 2 for diff mode, got %+v", res.Report)
+		t.Errorf("expected error/invalid_usage/exit 2 for all+diff mode, got %+v", res.Report)
 	}
 }
 
