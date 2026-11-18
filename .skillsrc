@@ -5,11 +5,11 @@ skills:
   golang:
     ref: golang-v1.3.10
   common:
-    ref: common-v2.9.8
+    ref: common-v2.9.9
   quality-engineering:
     ref: quality-engineering-v1.6.4
   system-design:
-    ref: system-design-v1.2.7
+    ref: system-design-v1.2.8
   cybersecurity:
     ref: cybersecurity-v1.0.2
 custom_overrides: []
