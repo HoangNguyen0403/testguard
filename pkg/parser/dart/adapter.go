@@ -56,7 +56,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	masked := maskCommentsAndStrings(src)
 	assertingHelpers := findAssertingHelpers(src)
 	assertingMethods := findAssertingMethods(src)
-	receivers := findDartReceivers(src)
+	receivers := findDartReceivers(masked)
 	groups := findDartGroups(src)
 	lineOffsets := []int{0}
 	for i := range len(src) {
@@ -300,19 +300,21 @@ func extractDartAssertions(body string, assertingHelpers, assertingMethods map[s
 }
 
 var (
-	dartClassDeclRegex = regexp.MustCompile(`\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)`)
-	dartCtorAssignRegex = regexp.MustCompile(`\b(?:final|var|const|late|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
-	dartTypedAssignRegex = regexp.MustCompile(`\b(?:final|var|const|late|static)?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=`)
+	dartClassDeclRegex        = regexp.MustCompile(`\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)`)
+	dartCtorAssignRegex       = regexp.MustCompile(`\b(?:final|var|const|late|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
+	dartTypedAssignRegex      = regexp.MustCompile(`\b(?:final|var|const|late|static)?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=`)
 	dartCollectionAssignRegex = regexp.MustCompile(`\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
-	dartLateTypedRegex = regexp.MustCompile(`\b(?:late|final|var|const|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;`)
+	dartLateTypedRegex        = regexp.MustCompile(`\b(?:late|final|var|const|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;`)
 )
 
 // findDartReceivers maps local variables to the class they hold when that class
 // is declared in the file or named as a Robot helper. Robot-pattern tests keep
 // their assertions inside the robot, so the receiver type is what lets the
 // adapter see those assertions.
-func findDartReceivers(src string) map[string]string {
-	masked := maskCommentsAndStrings(src)
+func findDartReceivers(masked string) map[string]string {
+	if !strings.Contains(masked, "class ") && !strings.Contains(masked, "Robot") {
+		return map[string]string{}
+	}
 	declared := make(map[string]bool)
 	for _, m := range dartClassDeclRegex.FindAllStringSubmatch(masked, -1) {
 		declared[m[1]] = true
@@ -344,6 +346,9 @@ func findDartReceivers(src string) map[string]string {
 // covers helper classes that hide expect()/verify() behind domain names.
 func findAssertingMethods(src string) map[string]bool {
 	methods := make(map[string]bool)
+	if !strings.Contains(src, "class ") {
+		return methods
+	}
 	n := len(src)
 	for i := 0; i < n; {
 		next := skipCommentsAndStrings(src, i)
