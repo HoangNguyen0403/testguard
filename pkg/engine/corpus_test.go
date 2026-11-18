@@ -531,6 +531,28 @@ func TestPrecisionCorpus(t *testing.T) {
 		{name: "Swift: empty performance block", dir: "testdata/corpus/swift_performance_empty",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-ZERO", Severity: sevBlocker, Path: "PerformanceTests.swift", Line: 4}}},
 
+		// --- Anti-Slop Phase 2 Rules & Fixtures ---
+		{name: "Universal: identity fixture Dart positive", dir: "testdata/corpus/univ_identity_dart_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-IDENTITY-FIXTURE", Severity: sevWarning, Path: "calc_test.dart", Line: 5}}},
+		{name: "Universal: identity fixture Dart negative", dir: "testdata/corpus/univ_identity_dart_negative"},
+		{name: "Universal: identity fixture TypeScript positive", dir: "testdata/corpus/univ_identity_ts_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-IDENTITY-FIXTURE", Severity: sevWarning, Path: "calc.test.ts", Line: 5}}},
+		{name: "Universal: identity fixture TypeScript negative", dir: "testdata/corpus/univ_identity_ts_negative"},
+		{name: "Universal: identity fixture Go positive", dir: "testdata/corpus/univ_identity_go_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-IDENTITY-FIXTURE", Severity: sevWarning, Path: "calc_test.go", Line: 10}}},
+		{name: "Universal: identity fixture Go negative", dir: "testdata/corpus/univ_identity_go_negative"},
+		{name: "TypeScript: static pinning positive", dir: "testdata/corpus/ts_static_pinning_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-TS-STATIC-PINNING", Severity: sevWarning, Path: "pinning.test.ts", Line: 7}}},
+		{name: "TypeScript: static pinning negative", dir: "testdata/corpus/ts_static_pinning_negative"},
+		{name: "Go: existence only positive", dir: "testdata/corpus/go_existence_only_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-GO-EXISTENCE-ONLY", Severity: sevWarning, Path: "existence_test.go", Line: 10}}},
+		{name: "Go: existence only negative", dir: "testdata/corpus/go_existence_only_negative"},
+		{name: "TypeScript: dual extension positive", dir: "testdata/corpus/ts_dual_ext_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-TS-DUAL-EXT", Severity: sevWarning, Path: "twin.test.js", Line: 1}}},
+		{name: "TypeScript: dual extension negative", dir: "testdata/corpus/ts_dual_ext_negative"},
+		{name: "Dart: arrow body zero assertions positive", dir: "testdata/corpus/dart_arrow_zero_positive",
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-ZERO", Severity: sevBlocker, Path: "arrow_test.dart", Line: 4}}},
+
 		// --- Discovery scope ---
 		{name: "Scope: linked-worktree and vendor exclusions", dir: "testdata/corpus/scope_exclusions",
 			excludedFiles: []excludedExpectation{

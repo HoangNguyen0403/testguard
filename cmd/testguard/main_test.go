@@ -46,30 +46,28 @@ func TestHelperProcess(t *testing.T) {
 	main()
 }
 
-func TestCLIDiffModeRejected(t *testing.T) {
-	stdout, stderr, exitCode := helperProcess(t, "--diff")
+func TestFlags_AllAndDiffMutualExclusion(t *testing.T) {
+	// Console mode
+	stdout, stderr, exitCode := helperProcess(t, "--all", "--diff")
 	if exitCode != 2 {
-		t.Errorf("expected exit code 2 for --diff, got %d (stderr: %s)", exitCode, stderr)
+		t.Errorf("expected exit code 2 for --all and --diff, got %d (stderr: %s)", exitCode, stderr)
 	}
-	if !strings.Contains(stderr, "--diff mode is not supported; use full scan") {
-		t.Errorf("expected rejection message in stderr, got %q", stderr)
+	if !strings.Contains(stderr, "--all and --diff cannot be used together") {
+		t.Errorf("expected mutual exclusion message in stderr, got %q", stderr)
 	}
 	if stdout != "" {
 		t.Errorf("expected empty stdout for console error, got %q", stdout)
 	}
-}
 
-func TestCLIJsonDiffModeEnvelope(t *testing.T) {
-	stdout, _, exitCode := helperProcess(t, "--diff", "--json")
-	if exitCode != 2 {
-		t.Errorf("expected exit code 2, got %d", exitCode)
+	// JSON mode
+	stdoutJSON, _, exitCodeJSON := helperProcess(t, "-a", "-d", "--json")
+	if exitCodeJSON != 2 {
+		t.Errorf("expected exit code 2 for -a -d --json, got %d", exitCodeJSON)
 	}
-
 	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &parsed); err != nil {
-		t.Fatalf("stdout must be valid JSON: %v (raw: %s)", err, stdout)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdoutJSON)), &parsed); err != nil {
+		t.Fatalf("stdout must be valid JSON: %v (raw: %s)", err, stdoutJSON)
 	}
-
 	if parsed["schema_version"] != float64(1) {
 		t.Errorf("expected schema_version 1, got %v", parsed["schema_version"])
 	}
@@ -79,6 +77,38 @@ func TestCLIJsonDiffModeEnvelope(t *testing.T) {
 	}
 	if parsed["exit_code"] != float64(2) {
 		t.Errorf("expected exit_code 2, got %v", parsed["exit_code"])
+	}
+}
+
+func TestFlags_FailOnWarning(t *testing.T) {
+	tmpDir := t.TempDir()
+	skipFile := filepath.Join(tmpDir, "skip_test.go")
+	_ = os.WriteFile(skipFile, []byte("package sample\nimport \"testing\"\nfunc TestSkipped(t *testing.T) {\n\tt.Skip(\"skip\")\n\tif 1 != 1 { t.Fatal(\"fail\") }\n}\n"), 0644)
+
+	// 1. Without --fail-on-warning -> exit code 0
+	_, _, exitCode0 := helperProcess(t, tmpDir)
+	if exitCode0 != 0 {
+		t.Errorf("expected exit code 0 without --fail-on-warning, got %d", exitCode0)
+	}
+
+	// 2. With --fail-on-warning -> exit code 1
+	_, _, exitCode1 := helperProcess(t, "--fail-on-warning", tmpDir)
+	if exitCode1 != 1 {
+		t.Errorf("expected exit code 1 with --fail-on-warning, got %d", exitCode1)
+	}
+
+	// 3. With --fail-on-warning and --json -> exit code 1, policy.status = warning_found
+	stdoutJSON, _, exitCodeJSON := helperProcess(t, "--fail-on-warning", "--json", tmpDir)
+	if exitCodeJSON != 1 {
+		t.Errorf("expected exit code 1 with --fail-on-warning --json, got %d", exitCodeJSON)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdoutJSON)), &parsed); err != nil {
+		t.Fatalf("stdout must be valid JSON: %v", err)
+	}
+	policy, ok := parsed["policy"].(map[string]interface{})
+	if !ok || policy["status"] != "warning_found" {
+		t.Errorf("expected policy.status=warning_found, got %+v", parsed["policy"])
 	}
 }
 

@@ -53,8 +53,7 @@ pkg/updater/                 # Self-updating mechanism via GitHub Releases API
 ## 3. Execution Lifecycle & Data Flow
 
 ```
-[CLI Invocation: testguard [paths...] -a]
-                     │
+[CLI Invocation: testguard [paths...] (--all | --diff [--base <ref>])]
                      ▼
              [cmd/testguard]
      (Instantiate ProgressReporter on os.Stderr)
@@ -269,10 +268,7 @@ absences below are deliberate, reviewed misses rather than guarantees.
 - **`GUARD-UNIV-FOCUS` follows literal-title `fit` only.** A dynamic `fit(name, fn)` call (for example inside
   a `forEach`) is discovered as one analysable test but does not receive the focus warning. Minor recall gap,
   deliberately not expanded in this pass.
-- **Dart arrow-body tests are not discovered.** A declaration such as `test('x', () => expect(add(1, 2), 3));`
-  or a hollow `test('y', () => add(1, 2));` produces no unit, so its assertions are never inspected and no
-  diagnostic is emitted; the rest of the file is still analysed and may report `complete`. This is a
-  pre-existing discovery limit, not fixed in the current correction pass.
+- **Dart arrow-body tests are discovered.** Single-expression arrow callbacks (`test('x', () => expect(...));`, `testWidgets('y', (tester) => expect(...));`) are discovered as complete test units with their expression body and assertions parsed. Generic assertions (`verify<Future<Map<String, dynamic>>>`) are supported without premature angle-bracket truncation.
 - **`GUARD-UNIV-TAUTOLOGY` inspects assert/require selectors in Go.** A bare `if got != got` comparison is
   not reported. Dart literal operands are compared as plain literals; Kotlin/Swift member paths follow the
   same-operand comparison with no invocation, so `a.id` versus `b.id` is not a tautology.
@@ -302,6 +298,17 @@ absences below are deliberate, reviewed misses rather than guarantees.
   code); Kotlin bare `check(cond) { … }` counts as an assertion because it throws on a false predicate, while
   `require(...)` is not credited; Swift `@Test`-attributed functions may take parameters, XCTest
   `func test…(params)` methods are not tests.
+
+### 9. Dual Scan Modes & Anti-Slop Rule Inventory (v0.2.0)
+
+- **Dual Modes**: `testguard` supports full target audits (`--all`, default) and change-bounded git diff audits (`--diff`). In `--diff` mode, candidate files are resolved via `git diff --name-only <base>`, filtered to supported test file extensions and bounded within explicit target directories.
+- **33 Active Rules Inventory**:
+  - **Universal**: `GUARD-UNIV-ZERO` (Blocker), `GUARD-UNIV-TAUTOLOGY` (Blocker), `GUARD-UNIV-01` (Warning), `GUARD-UNIV-SKIP` (Warning), `GUARD-UNIV-FOCUS` (Warning), `GUARD-UNIV-IDENTITY-FIXTURE` (Warning), `GUARD-UNIV-02` (Advisory), `GUARD-UNIV-NAME` (Advisory).
+  - **Dart**: `GUARD-DART-MOCK-ECHO` (Warning), `GUARD-DART-SEED-ECHO` (Warning), `GUARD-DART-VACUOUS-STATE` (Warning), `GUARD-DART-BLOC-DUPLICATE` (Advisory).
+  - **Go**: `GUARD-GO-SWALLOWED-ERR` (Warning), `GUARD-GO-UNCHECKED-WANT` (Warning), `GUARD-GO-EXISTENCE-ONLY` (Warning), `GUARD-GO-01` (Advisory), `GUARD-GO-03` (Advisory).
+  - **TypeScript / Web**: `GUARD-TS-FLOATING-ASSERT` (Warning), `GUARD-TS-CATCH-ONLY` (Warning), `GUARD-TS-CONDITIONAL-ASSERT` (Warning), `GUARD-TS-SELF-MOCK` (Warning), `GUARD-TS-MOCKED-SUT` (Warning), `GUARD-TS-STATIC-PINNING` (Warning), `GUARD-TS-DUAL-EXT` (Warning), `GUARD-REACT-02` (Warning), `GUARD-NEST-01` (Warning), `GUARD-NEST-02` (Warning), `GUARD-TS-01` (Advisory), `GUARD-TS-EXISTENCE-ONLY` (Advisory).
+  - **Mobile & E2E**: `GUARD-KT-01` (Warning), `GUARD-KT-02` (Warning), `GUARD-E2E-01` (Warning), `GUARD-SWIFT-01` (Advisory).
+
 
 ### Measured Scan Cost
 Single-file TypeScript scans grow quadratically in the number of tests because each unit re-scans its token

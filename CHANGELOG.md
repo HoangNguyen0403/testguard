@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Dual Scan Modes (`--all` vs `--diff`)**: Added `--diff` (`-d`) flag to audit only git modified and untracked candidate test files against `--base <ref>` (with default clean-repo fallback), properly scoped to explicit target directories with excluded directory filtering. `--diff` and `--all` are mutually exclusive.
+- **Dart Arrow-Body Test Discovery**: Added discovery for single-expression arrow callback tests (`test('name', () => ...)` and `testWidgets('name', (tester) => ...)`), complete with multiline argument parsing and generic bracket balancing (`verify<Future<...>>`).
+- **4 New Anti-Slop Rules**:
+  - `GUARD-UNIV-IDENTITY-FIXTURE` (Warning, Dart/TypeScript/Go): Flags math, pricing, discount, and fee calculation tests where active operands are bound to zero or identity values while asserting non-zero business outcomes.
+  - `GUARD-TS-STATIC-PINNING` (Warning, TypeScript): Bans tests where every assertion checks only static GraphQL AST strings (`print(GQL)`) or static JSON translation schema keys without exercising runtime behavior.
+  - `GUARD-TS-DUAL-EXT` (Warning, TypeScript): Bans twin `.test.js(x)` test files that coexist with `.test.ts(x)` for the same stem in the same directory.
+  - `GUARD-GO-EXISTENCE-ONLY` (Warning, Go): Flags multi-return production calls `(T, error)` whose results are verified only for non-nil existence without asserting on returned payload fields.
+- **Corpus Parity Fixtures**: Added complete true-positive and true-negative corpus fixtures for all 4 new rules across all supported languages, certified under `TestPrecisionCorpus`.
 - **Real Language Adapters for Every Supported Language**: TypeScript/JavaScript (`.ts .tsx .js .jsx .mjs .cjs .mts .cts`), Kotlin (`.kt`), and Swift (`.swift`) are now parsed by dedicated adapters instead of the previous file-wide regex heuristic. An adapter failure is reported as `parse_failed`, exactly like Go and Dart. `analysis.analyzed_tests` counts the units those adapters return.
 - **TypeScript / JavaScript Rule Pack** (Warning unless stated): `GUARD-TS-FLOATING-ASSERT` (un-awaited `.resolves`/`.rejects`), `GUARD-TS-CATCH-ONLY` (assertions reachable only from `catch`), `GUARD-TS-CONDITIONAL-ASSERT` (a branch can assert nothing), `GUARD-TS-EXISTENCE-ONLY` (Advisory: presence-only oracles), `GUARD-TS-SELF-MOCK` (test invokes the mock it asserts on), `GUARD-TS-MOCKED-SUT` (file auto-mocks its own subject).
 - **Go Rules**: `GUARD-GO-SWALLOWED-ERR` (`if err != nil { return }`) and `GUARD-GO-UNCHECKED-WANT` (table row expectation fields never read in the loop body).

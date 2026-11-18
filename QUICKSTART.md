@@ -84,11 +84,19 @@ test/application/account/customer_code_bloc_test.dart:497:1
 
 ## Step 4: Target specific modules and handle empty scopes (`--allow-empty`)
 
-### Full Mode Execution
-TestGuard executes full target audits across all discovered test files (`effective_mode: "full"`).
+### Full & Diff Mode Execution
+TestGuard executes full target audits across all discovered test files by default (`effective_mode: "full"`).
 
-> ⚠️ **Note on `--diff` / `-d`**: The `--diff` flag is unsupported in TestGuard 0.1.4 and is explicitly rejected with exit code `2` (`invalid_usage`). Scans do not calculate git diffs; they analyze target files in full.
+To audit only test files modified in your feature branch against the base branch, use `--diff` (`-d`):
+```bash
+# Scan modified/untracked test files against origin/develop
+testguard --diff --base origin/develop
 
+# Scan modified test files against default clean-repo fallback
+testguard --diff
+```
+
+> 💡 **Diff Mode Semantics**: `--diff` runs `git diff --name-only` against `--base` and filters candidates against recognized test file extensions. If no test files were modified, pass `--allow-empty` to exit with code `3` (`not_applicable`, reason: `empty_allowed`). `--diff` and `--all` are mutually exclusive.
 To target a specific directory or individual test file during development:
 
 ```bash

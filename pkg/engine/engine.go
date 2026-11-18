@@ -30,15 +30,16 @@ type ProgressFunc func(phase string, current, total int, currentFile string)
 
 // Options configures the engine audit run.
 type Options struct {
-	TargetPaths []string
-	DiffOnly    bool
-	ScanAll     bool
-	AllowEmpty  bool
-	BaseBranch  string
-	ProgressFn  ProgressFunc
-	Version     string
-	Commit      string
-	Date        string
+	TargetPaths   []string
+	DiffOnly      bool
+	ScanAll       bool
+	AllowEmpty    bool
+	BaseBranch    string
+	FailOnWarning bool
+	ProgressFn    ProgressFunc
+	Version       string
+	Commit        string
+	Date          string
 
 	// Fault injection hooks for testing OS permission / traversal / read errors
 	FailTraversal func(path string) error
@@ -63,9 +64,10 @@ type Engine struct {
 	namingDetect *naming.Detector
 
 	// Universal hygiene rules
-	tautologyRule *hygiene.TautologyRule
-	skipRule      *hygiene.SkipRule
-	focusRule     *hygiene.FocusRule
+	tautologyRule       *hygiene.TautologyRule
+	skipRule            *hygiene.SkipRule
+	focusRule           *hygiene.FocusRule
+	identityFixtureRule *hygiene.IdentityFixtureRule
 
 	// E2E rules
 	hardWaitRule *e2e.HardWaitRule
@@ -77,10 +79,11 @@ type Engine struct {
 	vacuousStateRule  *dartrules.VacuousStateRule
 
 	// Go rules
-	domainPurityRule   *gorules.DomainPurityRule
-	tableDuplicateRule *gorules.TableDuplicateRule
-	swallowedErrorRule *gorules.SwallowedErrorRule
-	uncheckedWantRule  *gorules.UncheckedWantRule
+	domainPurityRule    *gorules.DomainPurityRule
+	tableDuplicateRule  *gorules.TableDuplicateRule
+	swallowedErrorRule  *gorules.SwallowedErrorRule
+	uncheckedWantRule   *gorules.UncheckedWantRule
+	goExistenceOnlyRule *gorules.ExistenceOnlyRule
 
 	// TypeScript / Fullstack rules
 	nestControllerEchoRule *tsrules.NestControllerEchoRule
@@ -92,7 +95,9 @@ type Engine struct {
 	existenceOnlyRule      *tsrules.ExistenceOnlyRule
 	selfMockRule           *tsrules.SelfMockRule
 	mockedSutRule          *tsrules.MockedSutRule
+	staticPinningRule      *tsrules.StaticPinningRule
 	reactSleepRule         *tsrules.ReactSleepRule
+	dualExtRule            *tsrules.DualExtRule
 
 	// Native Mobile rules
 	kotlinCoroutineRule *mobilerules.KotlinCoroutineAdvanceRule
@@ -115,9 +120,10 @@ func New() *Engine {
 		cloneDetect:  clone.New(),
 		namingDetect: naming.New(),
 
-		tautologyRule: hygiene.NewTautologyRule(),
-		skipRule:      hygiene.NewSkipRule(),
-		focusRule:     hygiene.NewFocusRule(),
+		tautologyRule:       hygiene.NewTautologyRule(),
+		skipRule:            hygiene.NewSkipRule(),
+		focusRule:           hygiene.NewFocusRule(),
+		identityFixtureRule: hygiene.NewIdentityFixtureRule(),
 
 		hardWaitRule: e2e.NewHardWaitRule(),
 
@@ -126,10 +132,11 @@ func New() *Engine {
 		blocDuplicateRule: dartrules.NewBlocDuplicateRule(),
 		vacuousStateRule:  dartrules.NewVacuousStateRule(),
 
-		domainPurityRule:   gorules.NewDomainPurityRule(),
-		tableDuplicateRule: gorules.NewTableDuplicateRule(),
-		swallowedErrorRule: gorules.NewSwallowedErrorRule(),
-		uncheckedWantRule:  gorules.NewUncheckedWantRule(),
+		domainPurityRule:    gorules.NewDomainPurityRule(),
+		tableDuplicateRule:  gorules.NewTableDuplicateRule(),
+		swallowedErrorRule:  gorules.NewSwallowedErrorRule(),
+		uncheckedWantRule:   gorules.NewUncheckedWantRule(),
+		goExistenceOnlyRule: gorules.NewExistenceOnlyRule(),
 
 		nestControllerEchoRule: tsrules.NewNestControllerEchoRule(),
 		nestUnmockedDbRule:     tsrules.NewNestUnmockedDbModuleRule(),
@@ -141,6 +148,8 @@ func New() *Engine {
 		selfMockRule:           tsrules.NewSelfMockRule(),
 		mockedSutRule:          tsrules.NewMockedSutRule(),
 		reactSleepRule:         tsrules.NewReactSleepRule(),
+		staticPinningRule:      tsrules.NewStaticPinningRule(),
+		dualExtRule:            tsrules.NewDualExtRule(),
 
 		kotlinCoroutineRule: mobilerules.NewKotlinCoroutineAdvanceRule(),
 		kotlinMockEchoRule:  mobilerules.NewKotlinMockEchoRule(),
@@ -173,37 +182,130 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	}
 	report.Scope.RequestedPaths = append([]string(nil), paths...)
 
-	if opts.DiffOnly {
+	if opts.ScanAll && opts.DiffOnly {
 		report.Analysis.Status = "error"
 		report.Analysis.Reason = "invalid_usage"
 		report.ExitCode = 2
-		report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("invalid_usage", "", "--diff mode is not supported; use full scan"))
+		report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("invalid_usage", "", "--all and --diff cannot be used together"))
 		return &Result{
 			Report:     report,
 			Violations: report.Findings,
 		}, nil
 	}
 
-	if opts.ProgressFn != nil {
-		opts.ProgressFn("discovering", 0, 0, "")
+	var allTestFiles []string
+	var discoveredFiles int
+	hasInputFailure := false
+
+	if opts.DiffOnly {
+		report.Scope.EffectiveMode = "diff"
+		repoDir := "."
+		if len(paths) > 0 && paths[0] != "" {
+			repoDir = paths[0]
+		}
+		if fi, err := os.Stat(repoDir); err == nil && !fi.IsDir() {
+			repoDir = filepath.Dir(repoDir)
+		}
+		repoRoot, err := ResolveGitRepoRoot(repoDir)
+		if err != nil {
+			report.Analysis.Status = "incomplete"
+			report.Analysis.Reason = "input_failure"
+			report.ExitCode = 2
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_unavailable", "", err.Error()))
+			return &Result{Report: report, Violations: report.Findings}, nil
+		}
+
+		diffFiles, err := CollectDiffFiles(repoRoot, opts.BaseBranch)
+		if err != nil {
+			report.Analysis.Status = "incomplete"
+			report.Analysis.Reason = "input_failure"
+			report.ExitCode = 2
+			report.Diagnostics = append(report.Diagnostics, models.NewDiagnostic("git_diff_failed", "", err.Error()))
+			return &Result{Report: report, Violations: report.Findings}, nil
+		}
+
+		targetAbsPaths := make([]string, 0, len(paths))
+		for _, p := range paths {
+			absP, err := filepath.Abs(p)
+			if err == nil {
+				if evalP, err := filepath.EvalSymlinks(absP); err == nil {
+					absP = evalP
+				}
+				targetAbsPaths = append(targetAbsPaths, absP)
+			}
+		}
+
+		seenExcluded := make(map[string]bool)
+		for _, file := range diffFiles {
+			evalFile, err := filepath.EvalSymlinks(file)
+			checkFile := file
+			if err == nil {
+				checkFile = evalFile
+			}
+
+			inTarget := false
+			for _, target := range targetAbsPaths {
+				rel, err := filepath.Rel(target, checkFile)
+				if err == nil && !strings.HasPrefix(rel, "..") {
+					inTarget = true
+					break
+				}
+			}
+			if !inTarget {
+				continue
+			}
+
+			if excluded, exclPath, reason := isExcludedDiffPath(repoRoot, file); excluded {
+				if !seenExcluded[exclPath] {
+					seenExcluded[exclPath] = true
+					report.Scope.Excluded = append(report.Scope.Excluded, models.ExcludedPath{Path: exclPath, Reason: reason})
+				}
+				continue
+			}
+			ext := filepath.Ext(file)
+			if !isSupportedLanguageExtension(ext) {
+				continue
+			}
+			if !isTestFileName(filepath.Base(file)) {
+				continue
+			}
+
+			discoveredFiles++
+
+			header := make([]byte, 256)
+			if f, oerr := os.Open(file); oerr == nil {
+				_, _ = f.Read(header)
+				f.Close()
+			}
+			if isGeneratedByAdapter(e.adapters, file, header) {
+				norm := normalizePath(file)
+				report.Scope.Excluded = append(report.Scope.Excluded, models.ExcludedPath{Path: norm, Reason: "generated"})
+				continue
+			}
+
+			allTestFiles = append(allTestFiles, file)
+		}
+	} else {
+		if opts.ProgressFn != nil {
+			opts.ProgressFn("discovering", 0, 0, "")
+		}
+
+		discovery := DiscoverScope(paths, e.adapters, opts.FailTraversal)
+		report.Scope.Excluded = discovery.Excluded
+		report.Scope.Unsupported = discovery.Unsupported
+		report.Diagnostics = append(report.Diagnostics, discovery.Diagnostics...)
+		discoveredFiles = discovery.DiscoveredFiles
+		hasInputFailure = discovery.InputFailure
+		allTestFiles = discovery.CandidateFiles
 	}
-
-	discovery := DiscoverScope(paths, e.adapters, opts.FailTraversal)
-	report.Scope.Excluded = discovery.Excluded
-	report.Scope.Unsupported = discovery.Unsupported
-	report.Diagnostics = append(report.Diagnostics, discovery.Diagnostics...)
-	discoveredFiles := discovery.DiscoveredFiles
-	hasInputFailure := discovery.InputFailure
-
-	allTestFiles := discovery.CandidateFiles
 
 	if opts.ProgressFn != nil {
 		opts.ProgressFn("discovered", len(allTestFiles), len(allTestFiles), "")
 	}
-
 	analyzedFiles := make([]string, 0)
 	failedFilesMap := make(map[string]bool)
 	var totalAnalyzedTests int
+	e.dualExtRule.SetScannedFiles(allTestFiles)
 
 	for i, file := range allTestFiles {
 		if opts.ProgressFn != nil {
@@ -270,6 +372,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 		for _, u := range units {
 			if u.Kind == "unit" || u.Kind == "bloc" {
 				fileViolations = append(fileViolations, e.tautologyRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.identityFixtureRule.Evaluate(u)...)
 			}
 		}
 		fileViolations = append(fileViolations, e.skipRule.CheckFile(file, src)...)
@@ -299,10 +402,12 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				fileViolations = append(fileViolations, e.tableDuplicateRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.swallowedErrorRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.uncheckedWantRule.Evaluate(u)...)
+				fileViolations = append(fileViolations, e.goExistenceOnlyRule.Evaluate(u)...)
 			}
 		case "typescript":
 			fileViolations = append(fileViolations, e.nestUnmockedDbRule.EvaluateFile(file, src, units)...)
 			fileViolations = append(fileViolations, e.mockedSutRule.EvaluateFile(file, src, units)...)
+			fileViolations = append(fileViolations, e.dualExtRule.EvaluateFile(file, src, units)...)
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.nestControllerEchoRule.Evaluate(u)...)
 				fileViolations = append(fileViolations, e.floatingAssertRule.Evaluate(u)...)
@@ -312,6 +417,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 				fileViolations = append(fileViolations, e.selfMockRule.Evaluate(u)...)
 				if !isE2E {
 					fileViolations = append(fileViolations, e.snapshotOnlyRule.Evaluate(u)...)
+					fileViolations = append(fileViolations, e.staticPinningRule.Evaluate(u)...)
 				}
 			}
 			if isE2E {
@@ -347,14 +453,20 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 	report.Analysis.FailedFiles = len(failedFilesMap)
 
 	blockerCount := 0
+	warningCount := 0
 	for _, f := range report.Findings {
-		if f.Severity == models.SeverityBlocker {
+		switch f.Severity {
+		case models.SeverityBlocker:
 			blockerCount++
+		case models.SeverityWarning:
+			warningCount++
 		}
 	}
 	report.Policy.BlockerCount = blockerCount
 	if blockerCount > 0 {
 		report.Policy.Status = "blocker_found"
+	} else if opts.FailOnWarning && warningCount > 0 {
+		report.Policy.Status = "warning_found"
 	} else {
 		report.Policy.Status = "no_blocker"
 	}
@@ -388,6 +500,8 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 		report.Analysis.Status = "complete"
 		report.Analysis.Reason = "analyzed"
 		if blockerCount > 0 {
+			report.ExitCode = 1
+		} else if opts.FailOnWarning && warningCount > 0 {
 			report.ExitCode = 1
 		} else {
 			report.ExitCode = 0
