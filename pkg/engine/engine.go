@@ -157,6 +157,29 @@ func New() *Engine {
 	}
 }
 
+// suppressBlocCloneDuplicates drops GUARD-UNIV-01 findings that duplicate a
+// GUARD-DART-BLOC-DUPLICATE finding on the same blocTest; one semantic
+// duplicate should produce one finding.
+func suppressBlocCloneDuplicates(violations []models.Violation) []models.Violation {
+	blocDuplicateLines := make(map[int]bool)
+	for _, v := range violations {
+		if v.RuleID == "GUARD-DART-BLOC-DUPLICATE" {
+			blocDuplicateLines[v.LineNumber] = true
+		}
+	}
+	if len(blocDuplicateLines) == 0 {
+		return violations
+	}
+	filtered := make([]models.Violation, 0, len(violations))
+	for _, v := range violations {
+		if v.RuleID == "GUARD-UNIV-01" && blocDuplicateLines[v.LineNumber] {
+			continue
+		}
+		filtered = append(filtered, v)
+	}
+	return filtered
+}
+
 // adapterFor returns the language adapter registered for a file path, matching
 // case-insensitively on the extension it declares.
 func (e *Engine) adapterFor(filePath string) (parser.LanguageAdapter, bool) {
@@ -434,6 +457,10 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			for _, u := range units {
 				fileViolations = append(fileViolations, e.swiftTimeoutRule.Evaluate(u)...)
 			}
+		}
+
+		if adapter.ID() == "dart" {
+			fileViolations = suppressBlocCloneDuplicates(fileViolations)
 		}
 
 		// Filter suppressed violations.

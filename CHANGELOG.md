@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Corpus Parity Gate**: the corpus test now fails when a rule is emitted that the catalog does not document, when an emitted severity differs from the documented severity, when a catalog rule has no true positive, when a catalog rule claims a language with no true-positive fixture, when an expected finding does not match on rule ID, severity, case-relative path and line, or when an ordinary case is not a complete analysis of at least one test. A skipped-only scope is asserted separately as `incomplete/empty_scope` with exit 2 so it cannot be mistaken for a clean pass.
 
 ### Changed
+- **False-positive hardening**:
+  - Dart Robot-pattern tests now resolve `*Robot` receivers and local helper-class methods that assert, so `robot.verifyX()` / `robot.expectX()` count as assertions.
+  - `GUARD-UNIV-IDENTITY-FIXTURE` no longer treats Flutter `Offset(...)` geometry or pagination `offset: 0` next to `pageSize`/`limit` as calculation identity fixtures.
+  - `GUARD-UNIV-01` no longer double-reports a `blocTest` already flagged by `GUARD-DART-BLOC-DUPLICATE`.
+  - `GUARD-UNIV-02` requires a 4-line body with at least 8 meaningful tokens, so concise validator/regex tests are not flagged.
 - **Severity Changes (behaviour change)**:
   - `GUARD-UNIV-01` Duplicate Test Body: `Advisory` → `Warning`; scope-partitioned (tests in different groups are never clones) and the 2–3 literal-variant "Similar test structure" advisory is no longer emitted.
   - `GUARD-GO-01` Domain Test Mock Usage: `Blocker` → `Advisory`; the message is a convention note, not a purity violation.

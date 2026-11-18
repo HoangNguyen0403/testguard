@@ -4,18 +4,30 @@ private func add(_ a: Int, _ b: Int) -> Int { a + b }
 
 final class VariantsTests: XCTestCase {
     func testAddsOneAndOne() {
-        XCTAssertEqual(add(1, 1), 2)
+        let input = 1
+        let expected = 2
+        let result = add(input, input)
+        XCTAssertEqual(result, expected)
     }
 
     func testAddsTwoAndTwo() {
-        XCTAssertEqual(add(2, 2), 4)
+        let input = 2
+        let expected = 4
+        let result = add(input, input)
+        XCTAssertEqual(result, expected)
     }
 
     func testAddsThreeAndThree() {
-        XCTAssertEqual(add(3, 3), 6)
+        let input = 3
+        let expected = 6
+        let result = add(input, input)
+        XCTAssertEqual(result, expected)
     }
 
     func testAddsFourAndFour() {
-        XCTAssertEqual(add(4, 4), 8)
+        let input = 4
+        let expected = 8
+        let result = add(input, input)
+        XCTAssertEqual(result, expected)
     }
 }

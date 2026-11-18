@@ -112,7 +112,7 @@ func TestPrecisionCorpus(t *testing.T) {
 		{name: "Dart: duplicate test body", dir: "testdata/corpus/univ_dart_clone_duplicate",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-01", Severity: sevWarning, Path: "duplicates_test.dart", Line: 10}}},
 		{name: "Dart: four literal variants", dir: "testdata/corpus/univ_dart_structural_variants",
-			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "variants_test.dart", Line: 18}}},
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "variants_test.dart", Line: 21}}},
 		{name: "Dart: tautological assertion", dir: "testdata/corpus/univ_dart_tautology",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-TAUTOLOGY", Severity: sevBlocker, Path: "tautology_test.dart", Line: 8}}},
 		{name: "Dart: committed skip", dir: "testdata/corpus/univ_dart_skip",
@@ -122,7 +122,7 @@ func TestPrecisionCorpus(t *testing.T) {
 		{name: "Kotlin: duplicate test body", dir: "testdata/corpus/univ_kotlin_clone_duplicate",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-01", Severity: sevWarning, Path: "DuplicatesTest.kt", Line: 13}}},
 		{name: "Kotlin: four literal variants", dir: "testdata/corpus/univ_kotlin_structural_variants",
-			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "VariantsTest.kt", Line: 23}}},
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "VariantsTest.kt", Line: 32}}},
 		{name: "Kotlin: committed skip", dir: "testdata/corpus/univ_kotlin_skip",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-SKIP", Severity: sevWarning, Path: "SkipTest.kt", Line: 8}}},
 		{name: "Kotlin: vague test name", dir: "testdata/corpus/univ_kotlin_vague_name",
@@ -130,13 +130,13 @@ func TestPrecisionCorpus(t *testing.T) {
 		{name: "Swift: duplicate test body", dir: "testdata/corpus/univ_swift_clone_duplicate",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-01", Severity: sevWarning, Path: "DuplicatesTests.swift", Line: 10}}},
 		{name: "Swift: four literal variants", dir: "testdata/corpus/univ_swift_structural_variants",
-			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "VariantsTests.swift", Line: 18}}},
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "VariantsTests.swift", Line: 27}}},
 		{name: "Swift: committed skip", dir: "testdata/corpus/univ_swift_skip",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-SKIP", Severity: sevWarning, Path: "SkipTests.swift", Line: 7}}},
 		{name: "Swift: vague test name", dir: "testdata/corpus/univ_swift_vague_name",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-NAME", Severity: sevAdvisory, Path: "VagueTests.swift", Line: 6}}},
 		{name: "TypeScript: four literal variants", dir: "testdata/corpus/univ_ts_structural_variants",
-			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "variants.test.ts", Line: 16}}},
+			expected: []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "variants.test.ts", Line: 19}}},
 		{name: "TypeScript: vague test name", dir: "testdata/corpus/univ_ts_vague_name",
 			expected: []expectedFinding{{RuleID: "GUARD-UNIV-NAME", Severity: sevAdvisory, Path: "vague.test.ts", Line: 3}}},
 
@@ -309,7 +309,6 @@ func TestPrecisionCorpus(t *testing.T) {
 		{name: "Dart: duplicate bloc scenario", dir: "testdata/corpus/dart_bloc_duplicate_positive",
 			expected: []expectedFinding{
 				{RuleID: "GUARD-DART-BLOC-DUPLICATE", Severity: sevAdvisory, Path: "duplicates_test.dart", Line: 9},
-				{RuleID: "GUARD-UNIV-01", Severity: sevWarning, Path: "duplicates_test.dart", Line: 9},
 			}},
 		{name: "Dart: E2E Future.delayed", dir: "testdata/corpus/dart_e2e_future_delayed",
 			expected: []expectedFinding{{RuleID: "GUARD-E2E-01", Severity: sevWarning, Path: "app_test.dart", Line: 8}}},
@@ -413,10 +412,8 @@ func TestPrecisionCorpus(t *testing.T) {
 			analyzedTests: 5},
 		// N3 regression: identifier/member/call titles, concatenated and template
 		// titles, and mocha `specify` declare tests when a callback is supplied.
-		// Discovering `specify` adds a fifth structurally similar declaration, so
-		// the pre-existing GUARD-UNIV-02 advisory legitimately fires at L74.
+		// Concise one-line bodies stay below the structural-repetition threshold.
 		{name: "TS: dynamic titles and specify are declarations", dir: "testdata/corpus/ts_dynamic_titles_negative",
-			expected:      []expectedFinding{{RuleID: "GUARD-UNIV-02", Severity: sevAdvisory, Path: "decl.test.ts", Line: 74}},
 			analyzedTests: 17},
 		// N3 negative control: an unevaluated dynamic title still declares exactly
 		// one analysable test, and a hollow one stays a zero-assertion blocker.
