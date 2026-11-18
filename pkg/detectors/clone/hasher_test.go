@@ -280,7 +280,7 @@ func TestDetectStructuralRepetition(t *testing.T) {
 			Name:      "repetition_case",
 			FilePath:  "pricing_test.go",
 			StartLine: i * 10,
-			RawBody:   fmt.Sprintf("var input = %d; result := Calc(input); assert.Equal(t, %d, result);", i*100, i*100),
+			RawBody:   fmt.Sprintf("var input = %d\nresult := Calc(input)\nexpected := %d\nassert.Equal(t, expected, result)", i*100, i*100),
 		})
 	}
 
@@ -529,7 +529,7 @@ func TestCloneRouting_FourBodiesDifferingOnlyInStringLiteral(t *testing.T) {
 			Name:      fmt.Sprintf("test_%s", title),
 			FilePath:  "fruit_test.go",
 			StartLine: (i + 1) * 10,
-			RawBody:   fmt.Sprintf(`renderHeader("%s"); expect(logo);`, title),
+			RawBody:   fmt.Sprintf("renderHeader(%q)\nconst header = getHeader()\nexpect(header).toBeVisible()\ncleanup()", title),
 		})
 	}
 
@@ -592,5 +592,29 @@ func TestCloneRouting_TwoIdenticalPlusOneLiteralVariant(t *testing.T) {
 	}
 	if len(violations) != 1 {
 		t.Errorf("expected exactly 1 violation total under AC4, got %d", len(violations))
+	}
+}
+
+func TestStructuralRepetition_ConciseValidatorBodiesExempt(t *testing.T) {
+	samples := []string{
+		"expect(isValidEmail('a@b.com'), isTrue);",
+		"expect(isValidEmail('bad'), isFalse);",
+		"expect(emailPattern.hasMatch('a@b.com'), isTrue);",
+		"expect(emailPattern.hasMatch('bad'), isFalse);",
+	}
+	var tests []parser.TestUnit
+	for i, body := range samples {
+		tests = append(tests, parser.TestUnit{
+			Name:      fmt.Sprintf("validator_case_%d", i),
+			FilePath:  "email_validator_test.dart",
+			StartLine: (i + 1) * 10,
+			RawBody:   body,
+		})
+	}
+
+	for _, v := range clone.New().Check(tests) {
+		if v.RuleID == "GUARD-UNIV-02" {
+			t.Fatalf("concise one-line validator tests must not trigger GUARD-UNIV-02: %+v", v)
+		}
 	}
 }

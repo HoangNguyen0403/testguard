@@ -845,3 +845,77 @@ void main() {
 		t.Errorf("expected assertions ['verify'], got %v", u2.Assertions)
 	}
 }
+
+func TestLocateUnitTestUnits_RobotPatternAssertions(t *testing.T) {
+	source := []byte(`
+class _CartPageRobot {
+  final WidgetTester tester;
+  _CartPageRobot(this.tester);
+
+  void verifyCartTotal(String value) {
+    expect(find.text(value), findsOneWidget);
+  }
+
+  void tapAddButton() {
+    tester.tap(find.byIcon(Icons.add));
+  }
+}
+
+class LocalAssertions {
+  void checkTotal(String value) {
+    verify(() => value);
+  }
+}
+
+void main() {
+  testWidgets('robot assertion helper', (tester) async {
+    final robot = _CartPageRobot(tester);
+    robot.verifyCartTotal('42');
+  });
+
+  testWidgets('robot action method', (tester) async {
+    final robot = _CartPageRobot(tester);
+    robot.tapAddButton();
+  });
+
+  testWidgets('robot class from another file', (tester) async {
+    final cartRobot = CartRobot(tester);
+    cartRobot.verifyTotal();
+  });
+
+  testWidgets('local helper class asserting method', (tester) async {
+    final helper = LocalAssertions();
+    helper.checkTotal('42');
+  });
+}
+`)
+
+	units, err := dart.NewAdapter().LocateTests(source, "cart_page_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 4 {
+		t.Fatalf("expected 4 units, got %d", len(units))
+	}
+
+	expected := map[string]string{
+		"robot assertion helper":              "receiver:robot.verifyCartTotal",
+		"robot action method":                 "receiver:robot.tapAddButton",
+		"robot class from another file":       "receiver:cartRobot.verifyTotal",
+		"local helper class asserting method": "receiver:helper.checkTotal",
+	}
+	for _, unit := range units {
+		want, ok := expected[unit.Name]
+		if !ok {
+			t.Errorf("unexpected unit %q", unit.Name)
+			continue
+		}
+		if len(unit.Assertions) != 1 || unit.Assertions[0] != want {
+			t.Errorf("test %q: expected assertions [%q], got %v", unit.Name, want, unit.Assertions)
+		}
+	}
+
+	if violations := zeroassert.New().Check(units); len(violations) != 0 {
+		t.Fatalf("expected no zero-assertion violations, got %+v", violations)
+	}
+}

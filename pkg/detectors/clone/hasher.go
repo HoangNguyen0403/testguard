@@ -345,6 +345,34 @@ func meaningfulTokenCount(tokens []token) int {
 	return count
 }
 
+const (
+	// minRepetitionBodyLines keeps concise 1-3 line validator and regex tests
+	// out of the structural-repetition advisory.
+	minRepetitionBodyLines = 4
+	minRepetitionTokens    = 8
+)
+
+func bodyLineCount(body string) int {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return 0
+	}
+	return strings.Count(trimmed, "\n") + 1
+}
+
+func qualifiesForStructuralRepetition(body string, tokens []token) bool {
+	return meaningfulTokenCount(tokens) >= minRepetitionTokens && bodyLineCount(body) >= minRepetitionBodyLines
+}
+
+func groupQualifiesForStructuralRepetition(group []analyzedUnit) bool {
+	for _, u := range group {
+		if !qualifiesForStructuralRepetition(u.unit.RawBody, u.tokens) {
+			return false
+		}
+	}
+	return true
+}
+
 // Detector identifies duplicate tests and structural repetition.
 type Detector struct{}
 
@@ -449,7 +477,7 @@ func (d *Detector) Check(units []parser.TestUnit) []models.Violation {
 			// 2-3 literal variants ("Similar test structure") are intentionally omitted per AC4.
 			numVariants := len(exactSubgroups)
 			firstUnit := group[0]
-			if numVariants >= 4 {
+			if numVariants >= 4 && groupQualifiesForStructuralRepetition(group) {
 				for i := 3; i < numVariants; i++ {
 					variantRep := exactSubgroups[i][0]
 					groupViolations = append(groupViolations, models.Violation{

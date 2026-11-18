@@ -55,6 +55,8 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	src := string(source)
 	masked := maskCommentsAndStrings(src)
 	assertingHelpers := findAssertingHelpers(src)
+	assertingMethods := findAssertingMethods(src)
+	receivers := findDartReceivers(src)
 	groups := findDartGroups(src)
 	lineOffsets := []int{0}
 	for i := range len(src) {
@@ -156,7 +158,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 			}
 
 			body := src[cbStart : closeBrace+1]
-			assertions := extractDartAssertions(body, assertingHelpers, testName)
+			assertions := extractDartAssertions(body, assertingHelpers, assertingMethods, receivers, testName)
 
 			unit := parser.TestUnit{
 				Name:       testName,
@@ -223,7 +225,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 		foundComma:
 
 			rawExpr := strings.TrimSpace(src[exprStart:exprEnd])
-			assertions := extractDartAssertions(rawExpr, assertingHelpers, testName)
+			assertions := extractDartAssertions(rawExpr, assertingHelpers, assertingMethods, receivers, testName)
 
 			unit := parser.TestUnit{
 				Name:       testName,
@@ -243,7 +245,7 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	return units, nil
 }
 
-func extractDartAssertions(body string, assertingHelpers map[string]bool, testName string) []string {
+func extractDartAssertions(body string, assertingHelpers, assertingMethods map[string]bool, receivers map[string]string, testName string) []string {
 	var assertions []string
 	for i := 0; i < len(body); {
 		next := skipCommentsAndStrings(body, i)
@@ -263,6 +265,23 @@ func extractDartAssertions(body string, assertingHelpers map[string]bool, testNa
 					after = skipWhitespaceAndComments(body, closeAngle+1)
 				}
 			}
+			if after < len(body) && body[after] == '.' {
+				memberStart := skipWhitespaceAndComments(body, after+1)
+				if memberStart < len(body) && isIdentStart(body[memberStart]) {
+					k := memberStart
+					for k < len(body) && isIdentPart(body[k]) {
+						k++
+					}
+					member := body[memberStart:k]
+					callPos := skipWhitespaceAndComments(body, k)
+					if callPos < len(body) && body[callPos] == '(' &&
+						isAssertingReceiverCall(ident, member, assertingMethods, receivers) {
+						assertions = append(assertions, "receiver:"+ident+"."+member)
+						i = callPos
+						continue
+					}
+				}
+			}
 			if after < len(body) && body[after] == '(' {
 				if isDirectAssertion(ident) {
 					assertions = append(assertions, ident)
@@ -278,6 +297,133 @@ func extractDartAssertions(body string, assertingHelpers map[string]bool, testNa
 		i++
 	}
 	return assertions
+}
+
+var (
+	dartClassDeclRegex = regexp.MustCompile(`\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)`)
+	dartCtorAssignRegex = regexp.MustCompile(`\b(?:final|var|const|late|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
+	dartTypedAssignRegex = regexp.MustCompile(`\b(?:final|var|const|late|static)?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=`)
+	dartCollectionAssignRegex = regexp.MustCompile(`\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(`)
+	dartLateTypedRegex = regexp.MustCompile(`\b(?:late|final|var|const|static)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*;`)
+)
+
+// findDartReceivers maps local variables to the class they hold when that class
+// is declared in the file or named as a Robot helper. Robot-pattern tests keep
+// their assertions inside the robot, so the receiver type is what lets the
+// adapter see those assertions.
+func findDartReceivers(src string) map[string]string {
+	masked := maskCommentsAndStrings(src)
+	declared := make(map[string]bool)
+	for _, m := range dartClassDeclRegex.FindAllStringSubmatch(masked, -1) {
+		declared[m[1]] = true
+	}
+
+	receivers := make(map[string]string)
+	add := func(name, class string) {
+		if strings.HasSuffix(class, "Robot") || declared[class] {
+			receivers[name] = class
+		}
+	}
+	for _, m := range dartCtorAssignRegex.FindAllStringSubmatch(masked, -1) {
+		add(m[1], m[2])
+	}
+	for _, m := range dartTypedAssignRegex.FindAllStringSubmatch(masked, -1) {
+		add(m[2], m[1])
+	}
+	for _, m := range dartLateTypedRegex.FindAllStringSubmatch(masked, -1) {
+		add(m[2], m[1])
+	}
+	for _, m := range dartCollectionAssignRegex.FindAllStringSubmatch(masked, -1) {
+		add(m[1], m[2])
+	}
+	return receivers
+}
+
+// findAssertingMethods collects method and function names whose bodies contain a
+// direct assertion. Dart adapters treat calls to these as assertions, which
+// covers helper classes that hide expect()/verify() behind domain names.
+func findAssertingMethods(src string) map[string]bool {
+	methods := make(map[string]bool)
+	n := len(src)
+	for i := 0; i < n; {
+		next := skipCommentsAndStrings(src, i)
+		if next != i {
+			i = next
+			continue
+		}
+		if !isIdentStart(src[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < n && isIdentPart(src[i]) {
+			i++
+		}
+		name := src[start:i]
+		if forbiddenHelpers[name] || isDirectAssertion(name) {
+			continue
+		}
+		openParen := skipWhitespaceAndComments(src, i)
+		if openParen >= n || src[openParen] != '(' {
+			continue
+		}
+		closeParen := findMatchingParen(src, openParen)
+		if closeParen == -1 {
+			continue
+		}
+		k := skipWhitespaceAndComments(src, closeParen+1)
+		switch {
+		case strings.HasPrefix(src[k:], "async*"):
+			k = skipWhitespaceAndComments(src, k+6)
+		case strings.HasPrefix(src[k:], "async") && (k+5 >= n || !isIdentPart(src[k+5])):
+			k = skipWhitespaceAndComments(src, k+5)
+		case strings.HasPrefix(src[k:], "sync*"):
+			k = skipWhitespaceAndComments(src, k+5)
+		}
+		if k < n && src[k] == '{' {
+			if closeBrace := findMatchingBrace(src, k); closeBrace != -1 {
+				if assertionRegex.MatchString(stripCommentsAndStrings(src[k+1 : closeBrace])) {
+					methods[name] = true
+				}
+				i = closeBrace + 1
+				continue
+			}
+		}
+		if k+1 < n && src[k] == '=' && src[k+1] == '>' {
+			if semi := findSemicolon(src, k+2); semi != -1 {
+				if assertionRegex.MatchString(stripCommentsAndStrings(src[k+2 : semi])) {
+					methods[name] = true
+				}
+				i = semi + 1
+				continue
+			}
+		}
+		i = closeParen + 1
+	}
+	return methods
+}
+
+func hasAssertionPrefix(method string) bool {
+	for _, prefix := range []string{"expect", "verify", "assert", "should", "check"} {
+		if strings.HasPrefix(method, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAssertingReceiverCall(receiver, method string, assertingMethods map[string]bool, receivers map[string]string) bool {
+	if hasAssertionPrefix(method) {
+		return true
+	}
+	class, known := receivers[receiver]
+	if !known {
+		return false
+	}
+	if strings.HasSuffix(class, "Robot") {
+		return true
+	}
+	return assertingMethods[method]
 }
 
 var forbiddenHelpers = map[string]bool{

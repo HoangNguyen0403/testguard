@@ -106,6 +106,59 @@ expect(total).toBe(90);
 			wantWarn: false,
 		},
 		{
+			name: "Flutter Offset geometry in a total scroll test is exempt",
+			unit: parser.TestUnit{
+				Name:      "calculates total scroll offset",
+				FilePath:  "test/ui/scroll_test.dart",
+				StartLine: 12,
+				RawBody: `
+await tester.drag(find.byType(ListView), const Offset(0, -300));
+expect(find.byType(ListItem), findsWidgets);
+`,
+			},
+			wantWarn: false,
+		},
+		{
+			name: "Pagination offset next to pageSize is exempt",
+			unit: parser.TestUnit{
+				Name:      "calculates total product pages",
+				FilePath:  "test/catalog/pagination_test.dart",
+				StartLine: 18,
+				RawBody: `
+final page = fetchProducts(pageSize: 10, offset: 0);
+expect(page.items, isNotEmpty);
+`,
+			},
+			wantWarn: false,
+		},
+		{
+			name: "Pagination offset next to limit is exempt",
+			unit: parser.TestUnit{
+				Name:      "calculates total product pages",
+				FilePath:  "test/catalog/pagination_test.dart",
+				StartLine: 24,
+				RawBody: `
+final page = fetchProducts(offset: 0, limit: 20);
+expect(page.items, isNotEmpty);
+`,
+			},
+			wantWarn: false,
+		},
+		{
+			name: "Calculation offset outside pagination still warns",
+			unit: parser.TestUnit{
+				Name:      "computes total with offset",
+				FilePath:  "test/pricing/total_test.dart",
+				StartLine: 30,
+				RawBody: `
+final offset = 0;
+final total = calculateTotal(price: 100, offset: offset);
+expect(total, 42);
+`,
+			},
+			wantWarn: true,
+		},
+		{
 			name: "Non-calculation test ignored",
 			unit: parser.TestUnit{
 				Name:      "renders user avatar",

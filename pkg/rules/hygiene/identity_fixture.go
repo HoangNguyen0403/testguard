@@ -53,8 +53,10 @@ func (r *IdentityFixtureRule) Evaluate(unit parser.TestUnit) []models.Violation 
 	}
 	cleanSrc, _ := blankCommentsAndFindStrings(unit.RawBody, lang)
 
-	// 3. Must match an operand bound to zero / empty
-	if !operandZeroRegex.MatchString(cleanSrc) {
+	// 3. Must match an operand bound to zero / empty. Flutter Offset geometry
+	// and pagination offset: 0 are not calculation identity fixtures.
+	zeroOperandOffsets := findCalcZeroOperands(cleanSrc)
+	if len(zeroOperandOffsets) == 0 {
 		return nil
 	}
 
@@ -68,16 +70,9 @@ func (r *IdentityFixtureRule) Evaluate(unit parser.TestUnit) []models.Violation 
 		return nil
 	}
 
-	// Locate the first matching line for the zero operand
+	// Locate the first matching line for the zero operand.
 	startLine := bodyStartLine(unit)
-	lines := strings.Split(cleanSrc, "\n")
-	matchedLine := startLine
-	for i, l := range lines {
-		if operandZeroRegex.MatchString(l) {
-			matchedLine = startLine + i
-			break
-		}
-	}
+	matchedLine := startLine + strings.Count(cleanSrc[:zeroOperandOffsets[0]], "\n")
 
 	return []models.Violation{
 		{
@@ -89,6 +84,49 @@ func (r *IdentityFixtureRule) Evaluate(unit parser.TestUnit) []models.Violation 
 			Suggestion: "Bind calculation operands (discounts, rebates, fees, taxes) to realistic non-zero values to ensure calculation logic is actively tested.",
 		},
 	}
+}
+
+var (
+	paginationKeyRegex   = regexp.MustCompile(`(?i)\b(?:pageSize|page_size|limit|perPage|per_page)\b`)
+	namedOffsetZeroRegex = regexp.MustCompile(`(?i)^offset\s*:`)
+)
+
+// findCalcZeroOperands returns the byte offsets of zero-bound calculation
+// operands, excluding Flutter Offset geometry and pagination offset: 0.
+func findCalcZeroOperands(src string) []int {
+	var offsets []int
+	for _, m := range operandZeroRegex.FindAllStringSubmatchIndex(src, -1) {
+		if isNonCalcZeroOperand(src, m) {
+			continue
+		}
+		offsets = append(offsets, m[0])
+	}
+	return offsets
+}
+
+func isNonCalcZeroOperand(src string, m []int) bool {
+	operand := strings.ToLower(src[m[2]:m[3]])
+	if operand != "offset" {
+		return false
+	}
+	text := src[m[0]:m[1]]
+	// Flutter geometry: const Offset(0, dy) is a UI coordinate, not a
+	// discount/rebate/fee operand.
+	if strings.HasPrefix(text, "Offset(") {
+		return true
+	}
+	// Pagination: offset: 0 next to pageSize/limit describes a page window.
+	if !namedOffsetZeroRegex.MatchString(text) {
+		return false
+	}
+	start, end := m[0]-160, m[1]+160
+	if start < 0 {
+		start = 0
+	}
+	if end > len(src) {
+		end = len(src)
+	}
+	return paginationKeyRegex.MatchString(src[start:end])
 }
 
 var nonZeroNumRegex = regexp.MustCompile(`(?i)(?:toBe|toEqual|equals|toStrictEqual|Equal)\s*\(\s*(?:[1-9][0-9]*(?:\.[0-9]+)?|['"][1-9][0-9]*(?:\.[0-9]+)?['"]|t,\s*[1-9][0-9]*(?:\.[0-9]+)?)\s*\)`)

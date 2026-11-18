@@ -6,21 +6,33 @@ private fun add(a: Int, b: Int): Int = a + b
 class VariantsTest {
     @Test
     fun addsOneAndOne() {
-        assertEquals(2, add(1, 1))
+        val input = 1
+        val expected = 2
+        val result = add(input, input)
+        assertEquals(expected, result)
     }
 
     @Test
     fun addsTwoAndTwo() {
-        assertEquals(4, add(2, 2))
+        val input = 2
+        val expected = 4
+        val result = add(input, input)
+        assertEquals(expected, result)
     }
 
     @Test
     fun addsThreeAndThree() {
-        assertEquals(6, add(3, 3))
+        val input = 3
+        val expected = 6
+        val result = add(input, input)
+        assertEquals(expected, result)
     }
 
     @Test
     fun addsFourAndFour() {
-        assertEquals(8, add(4, 4))
+        val input = 4
+        val expected = 8
+        val result = add(input, input)
+        assertEquals(expected, result)
     }
 }
