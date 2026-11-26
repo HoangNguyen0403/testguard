@@ -158,61 +158,11 @@ testguard rules
 
 ---
 
-## Step 6: Integrate with CI (Observation-First Adoption & Rollback)
+## Step 6: Integrate with CI
 
-### Observation-First Adoption Policy
-When introducing TestGuard to an existing repository, deploy it in **observation-only (non-blocking)** mode. Do not configure TestGuard to block pull requests immediately.
+Use the copyable GitHub Actions, GitLab CI, Azure Pipelines, and generic shell examples in the [README CI integration guide](README.md#ci-integration). They install the pinned TestGuard `v0.1.7`, preserve the raw JSON report, and leave the scanner's process exit code authoritative.
 
-1. **Observation Baseline**: Run TestGuard as an advisory step to collect baseline findings and calibrate rule applicability.
-2. **Promoting to Blocking**: Converting TestGuard into a blocking PR gate requires explicit human owner approval and empirical calibration evidence.
-3. **Rollback Ownership**: If false alerts or pipeline disruptions occur, rollback ownership is clear: disable the blocking gate (e.g. set `continue-on-error: true` or decouple the status check) while preserving artifact generation and existing unrelated gates. Never convert missing evidence or errors into passing status as a rollback.
-
-### Azure DevOps Pipelines (`azure-pipelines.yml`)
-
-```yaml
-- script: |
-    curl -fsSL https://raw.githubusercontent.com/HoangNguyen0403/testguard/main/install.sh | bash
-    # Observation-only mode: run scan, report actual exit, let pipeline continue
-    testguard -f azure
-  displayName: '🛡️ TestGuard Test Quality Audit (Observation)'
-  continueOnError: true
-```
-
-### GitHub Actions (`.github/workflows/testguard.yml`)
-
-```yaml
-name: Test Quality Audit (Observation)
-
-on: [pull_request]
-
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: curl -fsSL https://raw.githubusercontent.com/HoangNguyen0403/testguard/main/install.sh | bash
-      # Observation-only step: captures actual scan exit code without || true masking
-      - id: scan
-        run: testguard --json > testguard-report.json
-        continue-on-error: true
-      # Explicitly validate and diagnose captured report on every run
-      - name: Diagnose report capture
-        if: always()
-        run: |
-          if [ ! -s testguard-report.json ]; then
-            echo "::warning::TestGuard report is missing or empty (scan step exit: ${{ steps.scan.outcome }})"
-          elif ! jq -e '.schema_version == 1' testguard-report.json > /dev/null 2>&1; then
-            echo "::warning::TestGuard report contains invalid or unsupported JSON"
-          else
-            echo "TestGuard report captured successfully"
-          fi
-      # Unconditionally upload report artifact for review
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: testguard-report
-          path: testguard-report.json
-```
+For observation-only rollout, use the platform's native non-blocking setting described in the guide. Do not mask scan failures or treat an incomplete scan as a pass. The reusable GitHub workflow is source-only until merged and must be called by its full immutable merged commit SHA; use the standalone GitHub example if the job must be non-blocking.
 
 ---
 
@@ -353,4 +303,4 @@ exit "$scan_exit"
 - **Static Pattern Matching**: TestGuard uses static AST token analysis and pattern recognition. It does **not** execute test suites or run dynamic mutation testing.
 - **Documented Recall Gaps**: Constructs the engine deliberately does not report — cross-file assertion helpers, hollow tests hidden behind unreferenced nested-function assertions, BLoC shapes outside the modelled subset, and the adapter lexical boundaries — are listed in `ARCHITECTURE.md` §8. An empty findings array only means "nothing matched", never "the tests are effective".
 - **No Production Assurance Claims**: TestGuard does not certify that tests kill production bugs or satisfy behavioral correctness.
-- **Unreleased Contract Boundary**: The v0.1.4 JSON envelope, exit code precedence, and `--allow-empty` boundary represent an unreleased specification. Do not claim published or released status.
+- **Published Contract Boundary**: The JSON envelope and exit-code contract documented here are published in TestGuard `v0.1.7`; verify `testguard --version` before relying on a specific installed binary.

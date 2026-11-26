@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add copyable TestGuard gates for GitHub Actions, GitLab CI, Azure Pipelines, and shell runners. A reusable GitHub workflow centralizes the pinned install and report upload; the CLI exit code remains the scan verdict.
 - **Public GitHub Diagnostic Benchmark**: Added top-star open-source repositories for each supported language (Go, Dart, TypeScript, JavaScript, Kotlin, Swift) with pinned commits, before/after scans, adjudicated finding labels, and explicit precision, recall, scope and adoption limits in `docs/benchmarks/github-corpus.md`. Empty or incomplete scans are reported as not applicable, never as clean.
 - **Dual Scan Modes (`--all` vs `--diff`)**: Added `--diff` (`-d`) flag to audit only git modified and untracked candidate test files against `--base <ref>` (with default clean-repo fallback), properly scoped to explicit target directories with excluded directory filtering. `--diff` and `--all` are mutually exclusive.
 - **Dart Arrow-Body Test Discovery**: Added discovery for single-expression arrow callback tests (`test('name', () => ...)` and `testWidgets('name', (tester) => ...)`), complete with multiline argument parsing and generic bracket balancing (`verify<Future<...>>`).
@@ -37,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Test-file discovery accepts `*-test.<script>` files under a `__tests__` directory in full, explicit-path and `--diff` scopes; generic hyphen names elsewhere remain excluded.
   - Swift Testing closure-form `#expect { … } throws:` and `#require { … }` count as assertions, and the skip scan is linear (a three-file Swift compiler sample dropped from 33.8 s to 0.04 s).
   - Dart Robot-pattern tests now resolve `*Robot` receivers and local helper-class methods that assert, so `robot.verifyX()` / `robot.expectX()` count as assertions.
+  - Dart tests can also call assertion-style methods directly on a `*Robot` constructor receiver, such as `StatusRobot(tester).expectReady()`. Action calls and method tearoffs on that receiver do not count as assertions.
   - `GUARD-UNIV-IDENTITY-FIXTURE` no longer treats Flutter `Offset(...)` geometry or pagination `offset: 0` next to `pageSize`/`limit` as calculation identity fixtures.
   - `GUARD-UNIV-01` no longer double-reports a `blocTest` already flagged by `GUARD-DART-BLOC-DUPLICATE`.
   - `GUARD-UNIV-02` requires a 4-line body with at least 8 meaningful tokens, so concise validator/regex tests are not flagged.
