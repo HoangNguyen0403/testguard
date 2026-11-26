@@ -247,10 +247,43 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 
 func extractDartAssertions(body string, assertingHelpers, assertingMethods map[string]bool, receivers map[string]string, testName string) []string {
 	var assertions []string
+	type pendingRobot struct {
+		name  string
+		depth int
+	}
+	var pending []pendingRobot
+	parenDepth := 0
+	lastSignificant := byte(0)
 	for i := 0; i < len(body); {
 		next := skipCommentsAndStrings(body, i)
 		if next != i {
+			if body[i] != '/' {
+				lastSignificant = body[i]
+			}
 			i = next
+			continue
+		}
+		switch body[i] {
+		case '(':
+			parenDepth++
+			lastSignificant = '('
+			i++
+			continue
+		case ')':
+			nextIndex := i + 1
+			if len(pending) > 0 && pending[len(pending)-1].depth == parenDepth {
+				candidate := pending[len(pending)-1]
+				pending = pending[:len(pending)-1]
+				if member, callParen, ok := anonymousRobotAssertionMember(body, i+1); ok {
+					assertions = append(assertions, "receiver:"+candidate.name+"."+member)
+					nextIndex = callParen
+				}
+			}
+			if parenDepth > 0 {
+				parenDepth--
+			}
+			lastSignificant = ')'
+			i = nextIndex
 			continue
 		}
 		if isIdentStart(body[i]) {
@@ -291,12 +324,55 @@ func extractDartAssertions(body string, assertingHelpers, assertingMethods map[s
 						assertions = append(assertions, "helper:"+ident)
 					}
 				}
+				if lastSignificant != '.' && isRobotConstructorName(ident) {
+					pending = append(pending, pendingRobot{name: ident, depth: parenDepth + 1})
+					lastSignificant = body[i-1]
+					i = after
+					continue
+				}
 			}
+			lastSignificant = body[i-1]
 			continue
+		}
+		if body[i] != ' ' && body[i] != '\t' && body[i] != '\r' && body[i] != '\n' {
+			lastSignificant = body[i]
 		}
 		i++
 	}
 	return assertions
+}
+
+func anonymousRobotAssertionMember(body string, afterClose int) (member string, callParen int, ok bool) {
+	dot := skipWhitespaceAndComments(body, afterClose)
+	if dot >= len(body) || body[dot] != '.' {
+		return "", 0, false
+	}
+	memberStart := skipWhitespaceAndComments(body, dot+1)
+	if memberStart >= len(body) || !isIdentStart(body[memberStart]) {
+		return "", 0, false
+	}
+	memberEnd := memberStart
+	for memberEnd < len(body) && isIdentPart(body[memberEnd]) {
+		memberEnd++
+	}
+	member = body[memberStart:memberEnd]
+	if !hasAssertionPrefix(member) {
+		return "", 0, false
+	}
+	callParen = skipWhitespaceAndComments(body, memberEnd)
+	if callParen >= len(body) || body[callParen] != '(' {
+		return "", 0, false
+	}
+	return member, callParen, true
+}
+
+func isRobotConstructorName(name string) bool {
+	if strings.HasPrefix(name, "_") {
+		name = name[1:]
+	}
+	return len(name) >= len("Robot") &&
+		strings.HasSuffix(name, "Robot") &&
+		name[0] >= 'A' && name[0] <= 'Z'
 }
 
 var (
@@ -430,6 +506,7 @@ func isAssertingReceiverCall(receiver, method string, assertingMethods map[strin
 	}
 	return assertingMethods[method]
 }
+
 
 var forbiddenHelpers = map[string]bool{
 	"if":                       true,

@@ -887,6 +887,11 @@ void main() {
     final helper = LocalAssertions();
     helper.checkTotal('42');
   });
+  testWidgets('named robot direct assertion', (tester) async {
+    final robot = _CartPageRobot(tester);
+    robot.expect(1, equals(1));
+  });
+
 }
 `)
 
@@ -894,8 +899,8 @@ void main() {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(units) != 4 {
-		t.Fatalf("expected 4 units, got %d", len(units))
+	if len(units) != 5 {
+		t.Fatalf("expected 5 units, got %d", len(units))
 	}
 
 	expected := map[string]string{
@@ -903,6 +908,7 @@ void main() {
 		"robot action method":                 "receiver:robot.tapAddButton",
 		"robot class from another file":       "receiver:cartRobot.verifyTotal",
 		"local helper class asserting method": "receiver:helper.checkTotal",
+		"named robot direct assertion":        "receiver:robot.expect",
 	}
 	for _, unit := range units {
 		want, ok := expected[unit.Name]
@@ -917,5 +923,130 @@ void main() {
 
 	if violations := zeroassert.New().Check(units); len(violations) != 0 {
 		t.Fatalf("expected no zero-assertion violations, got %+v", violations)
+	}
+}
+
+func TestLocateUnitTestUnits_AnonymousRobotConstructorAssertions(t *testing.T) {
+	source := []byte(`
+void main() {
+  testWidgets('anonymous robot assertion', (tester) async {
+    AppStatusRobot(tester).expectUnconfigured();
+  });
+
+  testWidgets('anonymous robot ordinary action', (tester) async {
+    AppStatusRobot(tester).tapCheck();
+  });
+
+  testWidgets('anonymous robot method tearoff', (tester) async {
+    AppStatusRobot(tester).expectUnconfigured;
+  });
+
+  testWidgets('anonymous robot assertion in comment', (tester) async {
+    // AppStatusRobot(tester).expectUnconfigured();
+    /* AppStatusRobot(tester).expectUnconfigured(); */
+  });
+
+  testWidgets('anonymous robot assertion in string', (tester) async {
+    const note = 'AppStatusRobot(tester).expectUnconfigured()';
+    print(note);
+  });
+
+  testWidgets('non robot receiver with assertion prefix', (tester) async {
+    LocalService(tester).expectConfig();
+  });
+
+  testWidgets('chained robot call', (tester) async {
+    AppStatusRobot(tester).tap().expectSomething();
+  });
+
+  testWidgets('private robot constructor', (tester) async {
+    _WidgetRobot(tester).expectReady();
+  });
+
+  testWidgets('qualified factory is not anonymous constructor', (tester) async {
+    factory.WidgetRobot(tester).expectReady();
+  });
+
+  testWidgets('cascade receiver is not anonymous constructor', (tester) async {
+    something..WidgetRobot(tester).expectReady();
+  });
+
+  testWidgets('constructor argument assertion is retained', (tester) async {
+    WidgetRobot(expect(1, equals(1))).expectReady();
+  });
+}
+`)
+
+	units, err := dart.NewAdapter().LocateTests(source, "app_status_widget_test.dart")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 11 {
+		t.Fatalf("expected 11 units, got %d", len(units))
+	}
+
+	expected := map[string][]string{
+		"anonymous robot assertion":                     {"receiver:AppStatusRobot.expectUnconfigured"},
+		"anonymous robot ordinary action":               nil,
+		"anonymous robot method tearoff":                 nil,
+		"anonymous robot assertion in comment":          nil,
+		"anonymous robot assertion in string":           nil,
+		"non robot receiver with assertion prefix":       nil,
+		"chained robot call":                             nil,
+		"private robot constructor":                      {"receiver:_WidgetRobot.expectReady"},
+		"qualified factory is not anonymous constructor": nil,
+		"cascade receiver is not anonymous constructor":  nil,
+		"constructor argument assertion is retained":    {"expect", "receiver:WidgetRobot.expectReady"},
+	}
+	for _, unit := range units {
+		t.Run(unit.Name, func(t *testing.T) {
+			want := expected[unit.Name]
+			if len(unit.Assertions) != len(want) {
+				t.Fatalf("expected assertions %v, got %v", want, unit.Assertions)
+			}
+			for i := range want {
+				if unit.Assertions[i] != want[i] {
+					t.Fatalf("expected assertions %v, got %v", want, unit.Assertions)
+				}
+			}
+		})
+	}
+
+	violations := zeroassert.New().Check(units)
+	if len(violations) != 8 {
+		t.Fatalf("expected 8 zero-assertion violations for negative controls, got %d: %+v", len(violations), violations)
+	}
+	for _, violation := range violations {
+		if violation.RuleID != "GUARD-UNIV-ZERO" {
+			t.Errorf("expected GUARD-UNIV-ZERO, got %s", violation.RuleID)
+		}
+		if violation.FilePath != "app_status_widget_test.dart" {
+			t.Errorf("expected app_status_widget_test.dart, got %s", violation.FilePath)
+		}
+		if violation.LineNumber == 4 {
+			t.Errorf("anonymous robot assertion at line 4 must not be reported: %+v", violation)
+		}
+	}
+}
+
+func TestDartAdapter_RobotConstructorsInRecognizedTestAreLinear(t *testing.T) {
+	const count = 8000
+	source := []byte("void main(){testWidgets('many robots',(tester){" +
+		strings.Repeat("WidgetRobot(", count) + "tester" +
+		strings.Repeat(")", count) + "; expect(true, isTrue);});}")
+	start := time.Now()
+	units, err := dart.NewAdapter().LocateTests(source, "robot_stress_test.dart")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 recognized test, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 || units[0].Assertions[0] != "expect" {
+		t.Fatalf("expected the explicit expect assertion only, got %v", units[0].Assertions)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("expected 8k nested Robot constructors in a test body to process in under 1s, took %v", elapsed)
 	}
 }
