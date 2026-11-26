@@ -447,6 +447,122 @@ func TestTableDuplicateRule_Addendum2(t *testing.T) {
 	})
 }
 
+func TestTableDuplicateRule_NameFieldConsumedAsInput(t *testing.T) {
+	checker := golang.NewTableDuplicateRule()
+
+	t.Run("keyed name passed to SUT is a distinguishing input -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestLaunchModelDeprecation",
+			FilePath:  "cmd/launch/deprecated_models_test.go",
+			StartLine: 6,
+			RawBody: `func TestLaunchModelDeprecation(t *testing.T) {
+	tests := []struct {
+		name       string
+		deprecated bool
+	}{
+		{name: "qwen2.5", deprecated: true},
+		{name: "llama3", deprecated: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDeprecatedLaunchModel(tt.name); got != tt.deprecated {
+				t.Fatalf("isDeprecatedLaunchModel(%q) = %v", tt.name, got)
+			}
+		})
+	}
+}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations when name is a SUT input, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("positional name passed to SUT is a distinguishing input -> none", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestIntegration_Editor",
+			FilePath:  "cmd/launch/integrations_test.go",
+			StartLine: 2090,
+			RawBody: `func TestIntegration_Editor(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"droid", true},
+		{"opencode", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			integration, err := integrationFor(tt.name)
+			if err == nil && integration.editor != tt.want {
+				t.Errorf("integrationFor(%q).editor = %v", tt.name, integration.editor)
+			}
+		})
+	}
+}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Fatalf("expected 0 violations when positional name is a SUT input, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("runner and report-only labels with identical rows still duplicate -> 1", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestRunnerOnlyLabels",
+			FilePath:  "service/calc_test.go",
+			StartLine: 10,
+			RawBody: `func TestRunnerOnlyLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "expired (future)", in: 10, want: 20},
+		{name: "expired (past)", in: 10, want: 20},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.in*2 != tc.want {
+				t.Errorf("%s: mismatch", tc.name)
+			}
+		})
+	}
+}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 1 {
+			t.Fatalf("expected 1 violation for runner-only labels, got %d: %+v", len(v), v)
+		}
+	})
+
+	t.Run("shadowed row binding passed to a call is not credited -> 1", func(t *testing.T) {
+		unit := parser.TestUnit{
+			Name:      "TestShadowedRowBinding",
+			FilePath:  "service/rows_test.go",
+			StartLine: 10,
+			RawBody: `func TestShadowedRowBinding(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+	}{
+		{name: "first", in: 1},
+		{name: "second", in: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt := struct {
+				name string
+				in   int
+			}{name: "shadow", in: 1}
+			consume(tt.name)
+		})
+	}
+}`,
+		}
+		if v := checker.Evaluate(unit); len(v) != 1 {
+			t.Fatalf("expected 1 violation when only a shadowed name is consumed, got %d: %+v", len(v), v)
+		}
+	})
+}
+
 func TestDomainPurityRule_RealPackageCallSurvivesLaterShadow(t *testing.T) {
 	checker := golang.NewDomainPurityRule()
 
@@ -860,6 +976,303 @@ func TestSwallowedErrorRule_NegativeCases(t *testing.T) {
 			violations := checker.Evaluate(unit)
 			if len(violations) != 0 {
 				t.Errorf("expected 0 violations for %s, got %d: %+v", tc.name, len(violations), violations)
+			}
+		})
+	}
+}
+
+// TestSwallowedErrorRule_ExpectedErrorMismatchExemption pins the one verified
+// exemption: a bare return guarded by an adjacent dominating expected-error
+// mismatch check that fails the same testing receiver for the same binding.
+func TestSwallowedErrorRule_ExpectedErrorMismatchExemption(t *testing.T) {
+	checker := golang.NewSwallowedErrorRule()
+
+	cases := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "resolved table input verifies expected error and bare return",
+			body: `func TestTransport(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		t.Run("case", func(t *testing.T) {
+			var think ThinkValue
+			err := json.Unmarshal([]byte("null"), &think)
+			if (err != nil) != tt.invalid {
+				t.Fatalf("error = %v, invalid = %v", err, tt.invalid)
+			}
+			if err != nil {
+				return
+			}
+			_ = think
+		})
+	}
+}`,
+			want: 0,
+		},
+		{
+			name: "self-derived local expectation does not verify",
+			body: `func TestSelfDerived(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		err := Build()
+		expected := err != nil
+		if (err != nil) != expected {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+		_ = tt
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "input reassigned from err before mismatch does not verify",
+			body: `func TestReassignedInput(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		err := Build()
+		tt.invalid = err != nil
+		if (err != nil) != tt.invalid {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "range input literal derived from err does not verify",
+			body: `func TestRangeDerived(t *testing.T) {
+	err := Build()
+	for _, tt := range []struct{ invalid bool }{{invalid: err != nil}} {
+		if (err != nil) != tt.invalid {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "mismatch guard init reassignment does not verify",
+			body: `func TestGuardInit(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		err := Build()
+		if tt.invalid = err != nil; (err != nil) != tt.invalid {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "captured input reassigned before t.Run does not verify",
+			body: `func TestCapturedInput(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		tt.invalid = false
+		t.Run("case", func(t *testing.T) {
+			err := Build()
+			if (err != nil) != tt.invalid {
+				t.Fatalf("error = %v", err)
+			}
+			if err != nil {
+				return
+			}
+		})
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "mismatch check with reversed operands",
+			body: `func TestReversed(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		err := Build()
+		if tt.invalid != (err != nil) {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 0,
+		},
+		{
+			name: "validity flag compared against err == nil",
+			body: `func TestValid(t *testing.T) {
+	for _, tt := range []struct{ valid bool }{{valid: false}} {
+		err := Build()
+		if (err == nil) != tt.valid {
+			t.Fatalf("error = %v", err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 0,
+		},
+		{
+			name: "mismatch check in outer test body",
+			body: `func TestOuter(t *testing.T) {
+	for _, tt := range []struct{ invalid bool }{{invalid: true}} {
+		err := Build()
+		if (err != nil) != tt.invalid {
+			t.Fatal(err)
+		}
+		if err != nil {
+			return
+		}
+	}
+}`,
+			want: 0,
+		},
+		{
+			name: "suite receiver mismatch check",
+			body: `func (s *Suite) TestSuite(t *testing.T) {
+	err := Build()
+	if (err != nil) != s.invalid {
+		s.T().Fatalf("error = %v", err)
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 0,
+		},
+		{
+			name: "non-fatal mismatch check does not verify",
+			body: `func TestErrorf(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Errorf("error = %v", err)
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "log-only mismatch check does not verify",
+			body: `func TestLogOnly(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Logf("error = %v", err)
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "fatal on a different receiver does not verify",
+			body: `func TestOtherReceiver(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		other.Fatalf("error = %v", err)
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "mismatch check on a shadowed binding does not verify",
+			body: `func TestShadow(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Fatalf("error = %v", err)
+	}
+	if err := Other(); err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "intervening statement breaks domination",
+			body: `func TestNotAdjacent(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Fatalf("error = %v", err)
+	}
+	prepare()
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "init reassignment of the guarded binding does not verify",
+			body: `func TestInitReassign(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Fatalf("error = %v", err)
+	}
+	if err = operation2(); err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "equality mismatch guard does not verify",
+			body: `func TestEquality(t *testing.T) {
+	err := Build()
+	if (err != nil) == tt.invalid {
+		t.Fatalf("error = %v", err)
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+		{
+			name: "guard with else branch does not verify",
+			body: `func TestElseBranch(t *testing.T) {
+	err := Build()
+	if (err != nil) != tt.invalid {
+		t.Fatalf("error = %v", err)
+	} else {
+		t.Logf("ok")
+	}
+	if err != nil {
+		return
+	}
+}`,
+			want: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			unit := parser.TestUnit{
+				Name:      "TestX",
+				FilePath:  "weak_test.go",
+				StartLine: 1,
+				RawBody:   tc.body,
+			}
+			violations := checker.Evaluate(unit)
+			if len(violations) != tc.want {
+				t.Fatalf("expected %d violations for %s, got %d: %+v", tc.want, tc.name, len(violations), violations)
+			}
+			if tc.want > 0 && violations[0].RuleID != "GUARD-GO-SWALLOWED-ERR" {
+				t.Errorf("expected GUARD-GO-SWALLOWED-ERR for %s, got %s", tc.name, violations[0].RuleID)
 			}
 		})
 	}

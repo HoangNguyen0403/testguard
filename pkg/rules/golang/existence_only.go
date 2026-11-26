@@ -84,41 +84,64 @@ func (r *ExistenceOnlyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 
 		resName := resIdent.Name
 
-		// Check how resName is used across the function body
+		// Check how the result binding is used across the function body. Any
+		// binding-identity use of the result identifier is a payload
+		// observation except the defining LHS ident, pair-wise bare discards,
+		// arguments of existence assertions (NotNil/NotNilf), and operands of
+		// nil comparisons. A pair-wise bare discard is `_ = res` or positional
+		// `_, x = res, y` where the RHS element at the blank's index is itself
+		// the (parenthesis-stripped) result identifier; idents nested in
+		// call/selector/index/star expressions are ordinary observations.
+		discarded := make(map[*ast.Ident]bool)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			assign, ok := n.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for i, lhs := range assign.Lhs {
+				blank, ok := lhs.(*ast.Ident)
+				if !ok || blank.Name != "_" || i >= len(assign.Rhs) {
+					continue
+				}
+				expr := assign.Rhs[i]
+				for {
+					paren, ok := expr.(*ast.ParenExpr)
+					if !ok {
+						break
+					}
+					expr = paren.X
+				}
+				id, ok := expr.(*ast.Ident)
+				if !ok || resIdent.Obj == nil || id.Obj != resIdent.Obj {
+					continue
+				}
+				discarded[id] = true
+			}
+			return true
+		})
+
 		hasPayloadCheck := false
 		ast.Inspect(fn.Body, func(inner ast.Node) bool {
 			if hasPayloadCheck {
 				return false
 			}
 			switch node := inner.(type) {
-			case *ast.SelectorExpr:
-				if id, ok := node.X.(*ast.Ident); ok && id.Name == resName {
-					// res.Field or res.Method()
-					hasPayloadCheck = true
-					return false
-				}
-			case *ast.IndexExpr:
-				if id, ok := node.X.(*ast.Ident); ok && id.Name == resName {
-					// res[i]
-					hasPayloadCheck = true
-					return false
-				}
 			case *ast.CallExpr:
-				for _, arg := range node.Args {
-					if isIdentNamed(arg, resName) {
-						if isExistenceAssertCall(node) {
-							continue
-						}
-						hasPayloadCheck = true
+				if isExistenceAssertCall(node) {
+					return false
+				}
+			case *ast.BinaryExpr:
+				if node.Op == token.EQL || node.Op == token.NEQ {
+					if (isResultIdent(node.X, resIdent) && isNilIdent(node.Y)) ||
+						(isResultIdent(node.Y, resIdent) && isNilIdent(node.X)) {
 						return false
 					}
 				}
-			case *ast.BinaryExpr:
-				if (isIdentNamed(node.X, resName) && isNilIdent(node.Y)) ||
-					(isIdentNamed(node.Y, resName) && isNilIdent(node.X)) {
+			case *ast.Ident:
+				if node == resIdent || resIdent.Obj == nil || discarded[node] {
 					return true
 				}
-				if isIdentNamed(node.X, resName) || isIdentNamed(node.Y, resName) {
+				if node.Obj == resIdent.Obj {
 					hasPayloadCheck = true
 					return false
 				}
@@ -145,11 +168,31 @@ func (r *ExistenceOnlyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	return violations
 }
 
-func isIdentNamed(expr ast.Expr, name string) bool {
-	if id, ok := expr.(*ast.Ident); ok {
-		return id.Name == name
+// isResultIdent reports whether expr refers to the multi-return result binding
+// declared by resIdent. Parentheses and type assertions are transparent, so
+// (res).Field, res[i], and res.(Wrapper).Field all observe the result payload.
+// Binding identity comes from the parser-resolved ast.Object, so a same-spelled
+// shadowing declaration is never credited to the result.
+func isResultIdent(expr ast.Expr, resIdent *ast.Ident) bool {
+	for {
+		switch e := expr.(type) {
+		case *ast.ParenExpr:
+			expr = e.X
+		case *ast.TypeAssertExpr:
+			expr = e.X
+		default:
+			id, ok := expr.(*ast.Ident)
+			if !ok || id.Name != resIdent.Name {
+				return false
+			}
+			if resIdent.Obj == nil {
+				// Without resolved bindings, identity cannot be proven; never
+				// credit an observation on spelling alone.
+				return false
+			}
+			return id.Obj == resIdent.Obj
+		}
 	}
-	return false
 }
 
 func isExistenceAssertCall(call *ast.CallExpr) bool {

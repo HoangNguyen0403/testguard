@@ -188,6 +188,7 @@ func TestKotlinAdapter_RawStringSurplusQuotesAreContent(t *testing.T) {
 		{"quoted regex fragment", `private val regex = """\d+\s"(\w+)"""".toRegex()`, 1, "assertEquals"},
 		{"plain raw string", `private val plain = """no surplus quotes"""`, 1, "assertEquals"},
 		{"empty raw string", `private val empty = """"""`, 1, "assertEquals"},
+		{"multi-dollar raw string", `private val multi = $$"""dollars ${not interpolated} stay literal"""`, 1, "assertEquals"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -257,6 +258,117 @@ func TestKotlinAdapter_UnterminatedRawStringStillFails(t *testing.T) {
 	units, err := kotlin.NewAdapter().LocateTests([]byte(src), "Broken.kt")
 	if err == nil {
 		t.Fatalf("expected a lexical error for an unterminated raw string, got %d units: %+v", len(units), names(units))
+	}
+	if !strings.Contains(err.Error(), "kotlin: unterminated") {
+		t.Errorf("expected an unterminated-construct error, got %q", err)
+	}
+}
+
+// Test Intent Record:
+// ID: kotlin-multi-dollar-string-interpolation-threshold
+// Requirements: review-corrective, recall.
+// Owner: kotlin adapter; Contract: a multi-dollar literal interpolates only at its own dollar threshold.
+// Fault: a `$$"..."` literal was scanned as a single-dollar template, so the `${` inside it swallowed the literal's closing quote and the file failed closed.
+// Layer: unit; Cases: compiler $$ template updateText call, following test keeps class scope.
+// Command: go test -count=1 ./pkg/parser/kotlin.
+// Oracle: Kotlin counts the dollars before the opening quote; fewer dollars before '{' or an identifier are literal text.
+// Boundaries: real Kotlin adapter; no mocks.
+func TestKotlinAdapter_MultiDollarStringsKeepScope(t *testing.T) {
+	src := `package probe
+
+class MultiDollarTest {
+    @Test
+    fun mutatedTemplate() {
+        file.findDescendantOfType<KtStringTemplateExpression>()!!.updateText($$"${\"b\"}")
+        Assertions.assertEquals($$"val s = \"${\"b\"}\"", file.text)
+    }
+
+    @Test
+    fun afterMultiDollar() {
+        assertEquals(3, add(1, 2))
+    }
+}
+`
+	units, err := kotlin.NewAdapter().LocateTests([]byte(src), "MultiDollarTest.kt")
+	if err != nil {
+		t.Fatalf("LocateTests error: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d: %+v", len(units), names(units))
+	}
+
+	first, second := units[0], units[1]
+	if first.Name != "mutatedTemplate" || first.Scope != "MultiDollarTest" {
+		t.Errorf("unexpected first unit: name=%q scope=%q", first.Name, first.Scope)
+	}
+	if first.EndLine != 8 {
+		t.Errorf("expected first unit to end at line 8, got %d (body=%q)", first.EndLine, first.RawBody)
+	}
+	if len(first.Assertions) == 0 || first.Assertions[0] != ".assertEquals" {
+		t.Errorf("expected the template test to keep its assertEquals assertion, got %v (body=%q)", first.Assertions, first.RawBody)
+	}
+	if second.Name != "afterMultiDollar" || second.Scope != "MultiDollarTest" || second.StartLine != 11 {
+		t.Errorf("expected the test after the literal to keep scope MultiDollarTest at line 11, got name=%q scope=%q line=%d", second.Name, second.Scope, second.StartLine)
+	}
+	if len(second.Assertions) == 0 {
+		t.Errorf("expected afterMultiDollar to keep its assertion, got none (body=%q)", second.RawBody)
+	}
+}
+
+// Test Intent Record:
+// ID: kotlin-single-dollar-template-still-interpolates
+// Requirements: review-corrective, recall.
+// Owner: kotlin adapter; Contract: an ordinary string still treats `${...}` as an expression, recursively.
+// Fault: a dollar-threshold change applied to single-dollar strings would end the literal at the nested quotes and break scope.
+// Layer: unit; Cases: `${listOf("}", "{")}` inside a single-dollar string, following test keeps class scope.
+// Command: go test -count=1 ./pkg/parser/kotlin.
+// Oracle: with one dollar before the quote, the first `${` is a template whose nested strings and braces belong to it.
+// Boundaries: real Kotlin adapter; no mocks.
+func TestKotlinAdapter_SingleDollarTemplateStillInterpolates(t *testing.T) {
+	src := `class SingleDollarTest {
+    @Test
+    fun interpolated() {
+        val s = "prefix ${listOf("}", "{")} suffix"
+        assertEquals(s, s)
+    }
+
+    @Test
+    fun afterInterpolation() {
+        assertTrue(true)
+    }
+}
+`
+	units, err := kotlin.NewAdapter().LocateTests([]byte(src), "SingleDollarTest.kt")
+	if err != nil {
+		t.Fatalf("LocateTests error: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("expected 2 units, got %d: %+v", len(units), names(units))
+	}
+	for _, unit := range units {
+		if unit.Scope != "SingleDollarTest" {
+			t.Errorf("unit %q: expected scope SingleDollarTest, got %q", unit.Name, unit.Scope)
+		}
+		if len(unit.Assertions) == 0 {
+			t.Errorf("unit %q: expected an assertion, got none (body=%q)", unit.Name, unit.RawBody)
+		}
+	}
+}
+
+// Test Intent Record:
+// ID: kotlin-unterminated-multi-dollar-fails-closed
+// Requirements: review-corrective, recall.
+// Owner: kotlin adapter; Contract: an unterminated multi-dollar literal is a lexical error, not a truncated scan.
+// Fault: treating `$$"` as ordinary code would let the rest of the file scan as if balanced.
+// Layer: unit; Cases: `$$"` with no closing quote.
+// Command: go test -count=1 ./pkg/parser/kotlin.
+// Oracle: the literal is unterminated before the line break and Kotlin strings do not span lines unless raw.
+// Boundaries: real Kotlin adapter; no mocks.
+func TestKotlinAdapter_UnterminatedMultiDollarStringStillFails(t *testing.T) {
+	src := "class A {\n    @Test\n    fun broken() {\n        val raw = $$\"no closing delimiter\n    }\n}\n"
+	units, err := kotlin.NewAdapter().LocateTests([]byte(src), "Broken.kt")
+	if err == nil {
+		t.Fatalf("expected a lexical error for an unterminated multi-dollar string, got %d units: %+v", len(units), names(units))
 	}
 	if !strings.Contains(err.Error(), "kotlin: unterminated") {
 		t.Errorf("expected an unterminated-construct error, got %q", err)

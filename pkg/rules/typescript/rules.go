@@ -1021,6 +1021,131 @@ func matchingOpenParenIndex(tokens []ts.Token, closeIdx int) int {
 	return -1
 }
 
+// literalHasContent reports whether a quoted string literal has at least one
+// code unit at runtime. The token keeps raw source, so line continuations
+// (backslash + line terminator) must be unescaped first: a literal made only of
+// them is the empty string and cannot be a content predicate.
+func literalHasContent(tok ts.Token) bool {
+	if tok.Type != ts.TokenString || len(tok.Value) < 2 {
+		return false
+	}
+	inner := tok.Value[1 : len(tok.Value)-1]
+	for i := 0; i < len(inner); i++ {
+		if inner[i] != '\\' || i+1 >= len(inner) {
+			return true
+		}
+		switch inner[i+1] {
+		case '\n':
+			i++
+		case '\r':
+			i++
+			if i+1 < len(inner) && inner[i+1] == '\n' {
+				i++
+			}
+		case 0xe2:
+			if i+3 < len(inner) && inner[i+2] == 0x80 && (inner[i+3] == 0xa8 || inner[i+3] == 0xa9) {
+				i += 3
+				continue
+			}
+			return true
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+// tokenIndexAt returns the index of the first token at or after offset. Tokens
+// are emitted in offset order, so a binary search keeps per-assertion lookups
+// from rescanning the token stream.
+func tokenIndexAt(tokens []ts.Token, offset int) int {
+	lo, hi := 0, len(tokens)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if tokens[mid].Offset < offset {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
+// firstArgumentLast returns the index of the last token of the first argument of
+// the call opened at openIdx, or -1 when the call is truncated. The scan stops
+// at the top-level ',' or at the call's closing ')' without inspecting the
+// message argument.
+func firstArgumentLast(tokens []ts.Token, openIdx int) int {
+	depth := 0
+	for k := openIdx + 1; k < len(tokens); k++ {
+		switch tokens[k].Value {
+		case "(", "[", "{":
+			depth++
+		case ")":
+			if depth == 0 {
+				return k - 1
+			}
+			depth--
+		case "]", "}":
+			depth--
+		case ",":
+			if depth == 0 {
+				return k - 1
+			}
+		}
+	}
+	return -1
+}
+
+// assertOkChecksContent reports whether assert.ok's whole first argument is a
+// string-content predicate: `[!]<ident>(.<ident>)*.includes("literal")`.
+// assert.ok(expr) alone only proves expr is truthy, but a non-empty substring
+// check pins content and must not be reported as existence-only (ponytail
+// pi-extension/test/extension.test.js:96-97). Matching the entire argument keeps
+// short-circuit shapes such as `!!r || x.includes("t")`, assignments and
+// ternaries out: their truthiness can hold while the substring check is false or
+// never evaluated. A message argument asserts nothing and is skipped, and a bare
+// value, a call wrapping includes, or a runtime-empty literal keep the existing
+// existence classification.
+func assertOkChecksContent(tokens []ts.Token, a ts.AssertionInfo) bool {
+	if a.Kind != "assert" || a.Matcher != "ok" {
+		return false
+	}
+	i := tokenIndexAt(tokens, a.StartOffset)
+	if i+3 >= len(tokens) || tokens[i].Offset != a.StartOffset || tokens[i].Value != "assert" ||
+		tokens[i+1].Value != "." || tokens[i+2].Value != "ok" || tokens[i+3].Value != "(" {
+		return false
+	}
+	last := firstArgumentLast(tokens, i+3)
+	start := i + 4
+	if last < start {
+		return false
+	}
+	if tokens[start].Value == "!" {
+		start++
+	}
+	// Suffix: . includes ( "literal" )
+	suffix := last - 4
+	if suffix < start ||
+		tokens[suffix].Value != "." ||
+		tokens[suffix+1].Value != "includes" ||
+		tokens[suffix+2].Value != "(" ||
+		!literalHasContent(tokens[suffix+3]) ||
+		tokens[suffix+4].Value != ")" {
+		return false
+	}
+	// Receiver immediately before it: <ident>(.<ident>)*
+	if tokens[start].Type != ts.TokenIdent {
+		return false
+	}
+	for p := start + 1; p < suffix; p += 2 {
+		if tokens[p].Value != "." || tokens[p+1].Type != ts.TokenIdent {
+			return false
+		}
+	}
+	return true
+}
+
 // ExistenceOnlyRule reports unit tests where assertions only check presence or truthiness without asserting state.
 type ExistenceOnlyRule struct{}
 
@@ -1042,6 +1167,11 @@ func (r *ExistenceOnlyRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		switch a.Matcher {
 		case "toBeDefined", "toBeTruthy", "exist", "ok":
 			isExist = true
+			// assert.ok(x.includes("literal")) pins content, not mere
+			// truthiness (ponytail pi-extension/test/extension.test.js:96-97).
+			if a.Matcher == "ok" && assertOkChecksContent(tokens, a) {
+				isExist = false
+			}
 		case "toBeNull", "toBeUndefined", "toBeFalsy":
 			// Check if negated: not.toBeNull, not.toBeUndefined, not.toBeFalsy
 			for _, m := range a.MatcherChain {
@@ -1197,9 +1327,15 @@ func isMockFactoryCall(tokens []ts.Token, i int) bool {
 func directMockCalls(tokens []ts.Token, mocks map[string]bool) map[string]bool {
 	n := len(tokens)
 	bodies := functionBodySpans(tokens)
+	conciseBodies := conciseArrowBodySpans(tokens)
 	inFunctionBody := func(idx int) bool {
 		for _, b := range bodies {
 			if idx > b[0] && idx < b[1] {
+				return true
+			}
+		}
+		for _, b := range conciseBodies {
+			if idx >= b[0] && idx < b[1] {
 				return true
 			}
 		}
@@ -1301,6 +1437,203 @@ func functionBodySpans(tokens []ts.Token) [][2]int {
 		spans = append(spans, [2]int{i, closeIdx})
 	}
 	return spans
+}
+
+// conciseArrowBodySpans returns token ranges of concise arrow function bodies
+// such as the expression in () => spy(), whose invocation belongs to the
+// callback rather than to the enclosing test scope. It covers only unbraced
+// bodies; block bodies are already handled by functionBodySpans.
+//
+// Type arrows and arrows invoked in place are excluded: neither defers a
+// body. Nested arrows are visited in token order with a single forward bound,
+// so an arrow already inside a recorded body is skipped instead of rescanning
+// the same suffix.
+func conciseArrowBodySpans(tokens []ts.Token) [][2]int {
+	n := len(tokens)
+	var spans [][2]int
+	coveredUntil := 0
+	for i := 0; i+1 < n; i++ {
+		if tokens[i].Value != "=>" || tokens[i+1].Value == "{" {
+			continue
+		}
+		if i < coveredUntil || isTypeArrow(tokens, i) {
+			continue
+		}
+		end := conciseArrowBodyEnd(tokens, i+1)
+		if end <= i+1 {
+			continue
+		}
+		if isImmediatelyInvokedConciseArrow(tokens, i+1, end) {
+			continue
+		}
+		spans = append(spans, [2]int{i + 1, end})
+		coveredUntil = end
+	}
+	return spans
+}
+
+// isImmediatelyInvokedConciseArrow reports whether the concise arrow whose body
+// starts at bodyStart and ends at the exclusive index end is a parenthesized
+// expression invoked in place, such as (() => spy())() or
+// (() => spy()).call(...). That call runs in the test itself, so the body is not
+// deferred. A trailing call on an enclosing argument, as in
+// register(() => spy())(), is not an invocation of the arrow.
+func isImmediatelyInvokedConciseArrow(tokens []ts.Token, bodyStart, end int) bool {
+	for close := end; close < len(tokens) && tokens[close].Value == ")"; close++ {
+		open := matchingOpenParenIndex(tokens, close)
+		if open < 0 || open >= bodyStart {
+			return false
+		}
+		if open > 0 {
+			if tokens[open-1].Type == ts.TokenIdent {
+				return false
+			}
+			switch tokens[open-1].Value {
+			case ")", "]", "}":
+				return false
+			}
+		}
+		call := close + 1
+		if call >= len(tokens) {
+			continue
+		}
+		switch tokens[call].Value {
+		case "(":
+			return true
+		case "?.":
+			if call+1 < len(tokens) && tokens[call+1].Value == "(" {
+				return true
+			}
+		case ".":
+			if call+2 < len(tokens) && (tokens[call+1].Value == "call" || tokens[call+1].Value == "apply") &&
+				tokens[call+2].Value == "(" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isTypeArrow reports whether the '=>' at arrowIdx belongs to a TypeScript type
+// expression, such as `const cb: () => void`, `type F = () => void`, or a
+// nested function type. A type arrow annotates a value; it does not defer a body.
+func isTypeArrow(tokens []ts.Token, arrowIdx int) bool {
+	for arrowIdx >= 1 {
+		paramStart := arrowIdx - 1
+		if tokens[paramStart].Value == ")" {
+			open := matchingOpenParenIndex(tokens, paramStart)
+			if open < 1 {
+				return false
+			}
+			paramStart = open
+		}
+		if paramStart < 1 {
+			return false
+		}
+		switch tokens[paramStart-1].Value {
+		case "<", "extends", "implements", "as", "satisfies":
+			return true
+		case ":":
+			return isBindingAnnotation(tokens, paramStart-1)
+		case "=":
+			return isTypeAlias(tokens, paramStart-1)
+		case "=>":
+			arrowIdx = paramStart - 1
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// isBindingAnnotation reports whether the ':' at colonIdx annotates a binding
+// or class member (`const cb: T`, `private on: T`) rather than supplying an
+// object-literal property value (`{ on: () => ... }`), where the arrow really
+// is a deferred body.
+func isBindingAnnotation(tokens []ts.Token, colonIdx int) bool {
+	name := colonIdx - 1
+	if name < 1 || tokens[name].Type != ts.TokenIdent {
+		return false
+	}
+	switch tokens[name-1].Value {
+	case "const", "let", "var", "readonly", "static", "private", "public", "protected", "declare", "override", "accessor":
+		return true
+	}
+	return false
+}
+
+// isTypeAlias reports whether the '=' at eqIdx introduces a type alias such as
+// `type Handler = () => void`.
+func isTypeAlias(tokens []ts.Token, eqIdx int) bool {
+	for k := eqIdx - 1; k >= 0 && eqIdx-k <= 8; k-- {
+		switch tokens[k].Value {
+		case "type", "declare":
+			return true
+		case ";", "{", "(", ")", "=", "const", "let", "var":
+			return false
+		}
+	}
+	return false
+}
+
+// conciseArrowBodyEnd returns the exclusive token index where the concise
+// arrow body starting at start ends. The body stops at the delimiter that
+// closes or separates its expression at bracket depth zero, or at an ASI line
+// break that neither the last token of the line nor the first token of the
+// next line continues.
+func conciseArrowBodyEnd(tokens []ts.Token, start int) int {
+	n := len(tokens)
+	depth := 0
+	for k := start; k < n; k++ {
+		switch tokens[k].Value {
+		case "(", "[", "{":
+			depth++
+		case ")", "]", "}":
+			if depth == 0 {
+				return k
+			}
+			depth--
+		case ",", ";":
+			if depth == 0 {
+				return k
+			}
+		}
+		if depth == 0 && k+1 < n && tokens[k+1].Line > tokens[k].Line &&
+			!expressionNeedsRightOperand(tokens[k].Value) && !continuesPreviousExpression(tokens[k+1].Value) {
+			return k + 1
+		}
+	}
+	return n
+}
+
+// expressionNeedsRightOperand reports tokens that cannot finish an expression,
+// including prefix unary operators whose operand may start on the next line.
+func expressionNeedsRightOperand(value string) bool {
+	switch value {
+	case ".", "?.", "(", "[", "+", "-", "*", "/", "%", "**", "!", "~",
+		"typeof", "void", "delete", "await",
+		"&&", "||", "??", "?", ":", "=", "+=", "-=", "*=", "/=", "%=",
+		"&&=", "||=", "??=", "**=",
+		"==", "===", "!=", "!==", "<", ">", "<=", ">=", "=>",
+		"&", "|", "^", "<<", ">>", ">>>", "instanceof", "in", "of", "as", "satisfies":
+		return true
+	}
+	return false
+}
+
+// continuesPreviousExpression reports tokens that can syntactically extend a
+// completed expression on the prior line. Prefix-only unary operators begin a
+// new statement instead of continuing the previous expression.
+func continuesPreviousExpression(value string) bool {
+	switch value {
+	case ".", "?.", "(", "[", "+", "-", "*", "/", "%", "**",
+		"&&", "||", "??", "?", ":", "=", "+=", "-=", "*=", "/=", "%=",
+		"&&=", "||=", "??=", "**=",
+		"==", "===", "!=", "!==", "<", ">", "<=", ">=", "=>",
+		"&", "|", "^", "<<", ">>", ">>>", "instanceof", "in", "of", "as", "satisfies":
+		return true
+	}
+	return false
 }
 
 // MockedSutRule reports test files that mock the file under test without a factory implementation.

@@ -45,9 +45,33 @@ func (a *Adapter) LocateTests(source []byte, filePath string) ([]parser.TestUnit
 	lines := strings.Split(src, "\n")
 	lineOffsets := computeLineOffsets(lines)
 
-	helperMap := findAssertingHelpers(src)
+	decls := scanSwiftDecls(src, lineOffsets)
 
-	units := parseSwiftUnits(src, lineOffsets, filePath, helperMap)
+	// Same-file asserting helpers: a declaration that is not itself a test but
+	// asserts directly stands in for an assertion at its call site.
+	helperMap := make(map[string]bool)
+	for _, d := range decls {
+		if !d.isTest && len(extractSwiftAssertions(d.body, nil)) > 0 {
+			helperMap[d.name] = true
+		}
+	}
+
+	var units []parser.TestUnit
+	for _, d := range decls {
+		if !d.isTest || d.disabled || isFirstStatementXCTSkip(d.body) {
+			continue
+		}
+		units = append(units, parser.TestUnit{
+			Name:       d.name,
+			FilePath:   filePath,
+			StartLine:  d.startLine,
+			EndLine:    d.endLine,
+			Kind:       "unit",
+			RawBody:    d.body,
+			Assertions: extractSwiftAssertions(d.body, helperMap),
+			Scope:      d.scope,
+		})
+	}
 	return units, nil
 }
 
@@ -387,8 +411,8 @@ func readIdent(src string, start int) (string, string, int) {
 }
 
 type scopeEntry struct {
-	name      string
-	braceOpen int
+	name  string
+	depth int
 }
 
 func buildScope(stack []scopeEntry) string {
@@ -421,11 +445,34 @@ func parseSwiftAttributes(src string, start, end int) []SwiftAttribute {
 		if src[i] == '@' {
 			attrStart := i
 			i++
-			nameStart := i
-			for i < end && isIdentPart(src[i]) {
-				i++
+			// Read the whole attribute path, then keep the module-qualified
+			// form only for Swift Testing's own `@Testing.Test`; `@Custom.Test`
+			// belongs to another module's type and does not mark a test.
+			attrPath := ""
+			for {
+				nameStart := i
+				for i < end && isIdentPart(src[i]) {
+					i++
+				}
+				if i == nameStart {
+					break
+				}
+				component := src[nameStart:i]
+				if attrPath == "" {
+					attrPath = component
+				} else {
+					attrPath += "." + component
+				}
+				if i < end && src[i] == '.' {
+					i++
+					continue
+				}
+				break
 			}
-			attrName := src[nameStart:i]
+			attrName := attrPath
+			if attrPath == "Testing.Test" {
+				attrName = "Test"
+			}
 
 			hasArgs := false
 			argsContent := ""
@@ -506,6 +553,12 @@ func findSwiftAttrStart(src string, funcOffset int) int {
 				i = j
 				continue
 			}
+			// Walk a module-qualified attribute path (@Testing.Test) as one
+			// unit so the declaration keeps the attribute written above it.
+			if j >= 0 && src[j] == '.' {
+				i = j - 1
+				continue
+			}
 			break
 		}
 		break
@@ -555,53 +608,60 @@ func isFirstStatementXCTSkip(body string) bool {
 	return false
 }
 
-func parseSwiftUnits(src string, lineOffsets []int, filePath string, helperMap map[string]bool) []parser.TestUnit {
-	var units []parser.TestUnit
-	n := len(src)
+// swiftDecl is one function declaration found by scanSwiftDecls.
+type swiftDecl struct {
+	name      string
+	body      string
+	scope     string
+	startLine int
+	endLine   int
+	// isTest reports discovery as a test: an XCTest method declared on a type
+	// or any declaration carrying @Test. A disabled @Test stays isTest so it
+	// is never mistaken for an asserting helper.
+	isTest   bool
+	disabled bool
+}
+
+// scanSwiftDecls walks src once and reports every function declaration with
+// the type scope it is declared in.
+//
+// Scope is tracked by brace depth, not by brace count: a closure in a member
+// initialiser (`let fixture = [1].map { $0 }`) opens and closes a brace
+// without leaving its type, so only the brace that matches a type's own body
+// pops it. Function bodies are skipped whole, so one walk both finds the
+// declarations and leaves no second, drifting scan to keep in step.
+func scanSwiftDecls(src string, lineOffsets []int) []swiftDecl {
+	var decls []swiftDecl
 	var scopeStack []scopeEntry
+	depth := 0
+	n := len(src)
 
 	for i := 0; i < n; {
-		next := skipCommentsAndStrings(src, i)
-		if next != i {
+		if next := skipCommentsAndStrings(src, i); next != i {
 			i = next
 			continue
 		}
 
-		// Scope exit: }
-		if src[i] == '}' {
-			if len(scopeStack) > 0 {
+		switch src[i] {
+		case '{':
+			depth++
+			i++
+			continue
+		case '}':
+			depth--
+			for len(scopeStack) > 0 && scopeStack[len(scopeStack)-1].depth > depth {
 				scopeStack = scopeStack[:len(scopeStack)-1]
 			}
 			i++
 			continue
 		}
 
-		// Types: class, struct, extension, enum, actor
-		// or @Suite struct ...
-		isTypeDecl := false
-		var typeKeywordLen int
-		if strings.HasPrefix(src[i:], "class ") && (i == 0 || !isIdentPart(src[i-1])) {
-			isTypeDecl = true
-			typeKeywordLen = 6
-		} else if strings.HasPrefix(src[i:], "struct ") && (i == 0 || !isIdentPart(src[i-1])) {
-			isTypeDecl = true
-			typeKeywordLen = 7
-		} else if strings.HasPrefix(src[i:], "extension ") && (i == 0 || !isIdentPart(src[i-1])) {
-			isTypeDecl = true
-			typeKeywordLen = 10
-		} else if strings.HasPrefix(src[i:], "enum ") && (i == 0 || !isIdentPart(src[i-1])) {
-			isTypeDecl = true
-			typeKeywordLen = 5
-		} else if strings.HasPrefix(src[i:], "actor ") && (i == 0 || !isIdentPart(src[i-1])) {
-			isTypeDecl = true
-			typeKeywordLen = 6
-		}
-
-		if isTypeDecl {
-			j := skipWhitespaceAndComments(src, i+typeKeywordLen)
+		if keywordLen, ok := swiftTypeKeywordLen(src, i); ok {
+			j := skipWhitespaceAndComments(src, i+keywordLen)
 			_, typeName, endIdent := readIdent(src, j)
 			if typeName != "" {
-				// Find {
+				// Find the type's opening brace, then count it so the scope
+				// records the depth its members are declared at.
 				k := endIdent
 				for k < n && src[k] != '{' && src[k] != ';' {
 					nextK := skipCommentsAndStrings(src, k)
@@ -612,95 +672,126 @@ func parseSwiftUnits(src string, lineOffsets []int, filePath string, helperMap m
 					k++
 				}
 				if k < n && src[k] == '{' {
-					scopeStack = append(scopeStack, scopeEntry{
-						name:      typeName,
-						braceOpen: k,
-					})
+					depth++
+					scopeStack = append(scopeStack, scopeEntry{name: typeName, depth: depth})
 					i = k + 1
 					continue
 				}
 			}
 		}
 
-		// Functions: func name(...)
 		if strings.HasPrefix(src[i:], "func") && (i == 0 || !isIdentPart(src[i-1])) && (i+4 >= n || !isIdentPart(src[i+4])) {
-			funcOffset := i
-			attrStart := findSwiftAttrStart(src, funcOffset)
-			attrs := parseSwiftAttributes(src, attrStart, funcOffset)
-
-			hasTestAttr := false
-			isDisabled := false
-			for _, a := range attrs {
-				if a.Name == "Test" {
-					hasTestAttr = true
-				}
-				if a.Disabled {
-					isDisabled = true
-				}
-			}
-
-			// Read func name
-			j := skipWhitespaceAndComments(src, funcOffset+4)
-			_, funcName, endIdent := readIdent(src, j)
-
-			isXCTest := strings.HasPrefix(funcName, "test") && len(funcName) > 4 && (funcName[4] < 'a' || funcName[4] > 'z')
-
-			if funcName != "" {
-				m := skipWhitespaceAndComments(src, endIdent)
-				if m < n && src[m] == '(' {
-					closeParen := findMatchingParen(src, m)
-					if closeParen != -1 {
-						// XCTest only discovers zero-argument methods, so a
-						// func named test… that takes parameters is a helper,
-						// not a test. @Test functions may take arguments.
-						takesParams := strings.TrimSpace(src[m+1:closeParen]) != ""
-						isUnit := hasTestAttr || (isXCTest && !takesParams)
-						isUnit = isUnit && !isDisabled
-						// Look for opening brace {
-						k := closeParen + 1
-						for k < n && src[k] != '{' && src[k] != ';' {
-							nextK := skipCommentsAndStrings(src, k)
-							if nextK != k {
-								k = nextK
-								continue
-							}
-							k++
-						}
-						if k < n && src[k] == '{' {
-							closeBrace := findMatchingBrace(src, k)
-							if closeBrace != -1 {
-								body := src[k+1 : closeBrace]
-								// Check first statement for throw XCTSkip(
-								if isUnit && !isFirstStatementXCTSkip(body) {
-									startLine := lineFromOffset(lineOffsets, funcOffset)
-									endLine := lineFromOffset(lineOffsets, closeBrace)
-									assertions := extractSwiftAssertions(body, helperMap)
-									scopeStr := buildScope(scopeStack)
-
-									units = append(units, parser.TestUnit{
-										Name:       funcName,
-										FilePath:   filePath,
-										StartLine:  startLine,
-										EndLine:    endLine,
-										Kind:       "unit",
-										RawBody:    body,
-										Assertions: assertions,
-										Scope:      scopeStr,
-									})
-								}
-								i = closeBrace + 1
-								continue
-							}
-						}
-					}
-				}
+			if decl, next, ok := parseSwiftFuncDecl(src, i, depth, scopeStack, lineOffsets); ok {
+				decls = append(decls, decl)
+				i = next
+				continue
 			}
 		}
 
 		i++
 	}
 
-	return units
+	return decls
+}
+
+// parseSwiftFuncDecl parses the declaration whose `func` keyword is at
+// funcOffset, returning it, the offset just past its body, and whether a body
+// was found. depth is the brace depth at the keyword and scopeStack the
+// enclosing type scopes; a declaration whose scope depth matches depth is a
+// direct member of that type.
+func parseSwiftFuncDecl(src string, funcOffset, depth int, scopeStack []scopeEntry, lineOffsets []int) (swiftDecl, int, bool) {
+	n := len(src)
+	attrs := parseSwiftAttributes(src, findSwiftAttrStart(src, funcOffset), funcOffset)
+
+	hasTestAttr := false
+	isDisabled := false
+	for _, a := range attrs {
+		if a.Name == "Test" {
+			hasTestAttr = true
+		}
+		if a.Disabled {
+			isDisabled = true
+		}
+	}
+
+	j := skipWhitespaceAndComments(src, funcOffset+4)
+	_, funcName, endIdent := readIdent(src, j)
+	if funcName == "" {
+		return swiftDecl{}, funcOffset, false
+	}
+
+	m := skipWhitespaceAndComments(src, endIdent)
+	if m >= n || src[m] != '(' {
+		return swiftDecl{}, funcOffset, false
+	}
+	closeParen := findMatchingParen(src, m)
+	if closeParen == -1 {
+		return swiftDecl{}, funcOffset, false
+	}
+
+	k := closeParen + 1
+	// A declaration with no body (a protocol requirement) must not borrow the
+	// next declaration's brace: stopping at '}' keeps the closing brace of the
+	// enclosing block in the scan, so depth and scope stay in step.
+	for k < n && src[k] != '{' && src[k] != ';' && src[k] != '}' {
+		nextK := skipCommentsAndStrings(src, k)
+		if nextK != k {
+			k = nextK
+			continue
+		}
+		k++
+	}
+	if k >= n || src[k] != '{' {
+		return swiftDecl{}, funcOffset, false
+	}
+	closeBrace := findMatchingBrace(src, k)
+	if closeBrace == -1 {
+		return swiftDecl{}, funcOffset, false
+	}
+
+	// XCTest discovers only zero-argument test-prefixed methods declared
+	// directly on a type. A file-scope declaration becomes a test only through
+	// @Test, and a test-prefixed declaration with parameters is a helper.
+	takesParams := strings.TrimSpace(src[m+1:closeParen]) != ""
+	isMember := len(scopeStack) > 0 && scopeStack[len(scopeStack)-1].depth == depth
+	isXCTest := isMember && isXCTestName(funcName) && !takesParams
+
+	return swiftDecl{
+		name:      funcName,
+		body:      src[k+1 : closeBrace],
+		scope:     buildScope(scopeStack),
+		startLine: lineFromOffset(lineOffsets, funcOffset),
+		endLine:   lineFromOffset(lineOffsets, closeBrace),
+		isTest:    hasTestAttr || isXCTest,
+		disabled:  isDisabled,
+	}, closeBrace + 1, true
+}
+
+// swiftTypeKeywordLen reports the length of the type-declaration keyword that
+// starts at i, so a member named e.g. `classify` is not read as `class`.
+func swiftTypeKeywordLen(src string, i int) (int, bool) {
+	if i > 0 && isIdentPart(src[i-1]) {
+		return 0, false
+	}
+	switch {
+	case strings.HasPrefix(src[i:], "class "):
+		return 6, true
+	case strings.HasPrefix(src[i:], "struct "):
+		return 7, true
+	case strings.HasPrefix(src[i:], "extension "):
+		return 10, true
+	case strings.HasPrefix(src[i:], "enum "):
+		return 5, true
+	case strings.HasPrefix(src[i:], "actor "):
+		return 6, true
+	}
+	return 0, false
+}
+
+// isXCTestName reports whether an XCTestCase method name is discoverable by
+// XCTest: a `test` prefix followed by a non-lowercase character.
+func isXCTestName(name string) bool {
+	return strings.HasPrefix(name, "test") && len(name) > 4 && (name[4] < 'a' || name[4] > 'z')
 }
 
 func extractSwiftAssertions(body string, helperMap map[string]bool) []string {
@@ -722,8 +813,10 @@ func extractSwiftAssertions(body string, helperMap map[string]bool) []string {
 			}
 			macro := body[i:j]
 			if macro == "#expect" || macro == "#require" {
+				// Swift Testing accepts both the call form `#expect(...)` and the
+				// trailing-closure form `#expect { ... } throws: { ... }`.
 				k := skipWhitespaceAndComments(body, j)
-				if k < n && body[k] == '(' {
+				if k < n && (body[k] == '(' || body[k] == '{') {
 					assertions = append(assertions, macro)
 					i = k + 1
 					continue
@@ -865,85 +958,4 @@ func dedupeStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-func findAssertingHelpers(src string) map[string]bool {
-	helpers := make(map[string]bool)
-	n := len(src)
-
-	for i := 0; i < n; {
-		next := skipCommentsAndStrings(src, i)
-		if next != i {
-			i = next
-			continue
-		}
-
-		if strings.HasPrefix(src[i:], "func") && (i == 0 || !isIdentPart(src[i-1])) && (i+4 >= n || !isIdentPart(src[i+4])) {
-			funcOffset := i
-			attrStart := findSwiftAttrStart(src, funcOffset)
-			attrs := parseSwiftAttributes(src, attrStart, funcOffset)
-
-			hasTestAttr := false
-			for _, a := range attrs {
-				if a.Name == "Test" {
-					hasTestAttr = true
-					break
-				}
-			}
-
-			j := skipWhitespaceAndComments(src, funcOffset+4)
-			_, funcName, endIdent := readIdent(src, j)
-
-			isXCTest := strings.HasPrefix(funcName, "test") && len(funcName) > 4 && (funcName[4] < 'a' || funcName[4] > 'z')
-			isTest := hasTestAttr
-
-			if !isTest && funcName != "" {
-				m := skipWhitespaceAndComments(src, endIdent)
-				if m < n && src[m] == '(' {
-					closeParen := findMatchingParen(src, m)
-					if closeParen != -1 {
-						// A func named test… that takes parameters cannot be
-						// discovered by XCTest, so it may assert as a helper.
-						if isXCTest && strings.TrimSpace(src[m+1:closeParen]) == "" {
-							isTest = true
-						}
-					}
-				}
-			}
-
-			if !isTest && funcName != "" {
-				m := skipWhitespaceAndComments(src, endIdent)
-				if m < n && src[m] == '(' {
-					closeParen := findMatchingParen(src, m)
-					if closeParen != -1 {
-						k := closeParen + 1
-						for k < n && src[k] != '{' && src[k] != ';' {
-							nextK := skipCommentsAndStrings(src, k)
-							if nextK != k {
-								k = nextK
-								continue
-							}
-							k++
-						}
-						if k < n && src[k] == '{' {
-							closeBrace := findMatchingBrace(src, k)
-							if closeBrace != -1 {
-								body := src[k+1 : closeBrace]
-								as := extractSwiftAssertions(body, nil)
-								if len(as) > 0 {
-									helpers[funcName] = true
-								}
-								i = closeBrace + 1
-								continue
-							}
-						}
-					}
-				}
-			}
-		}
-
-		i++
-	}
-
-	return helpers
 }

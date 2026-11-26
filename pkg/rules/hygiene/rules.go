@@ -947,7 +947,7 @@ var (
 	dartSkipStr        = regexp.MustCompile(`^skip\s*:\s*(?:'[^']*'|"[^"]*")`)
 	dartSkipAnnotation = regexp.MustCompile(`^@Skip\s*\(`)
 	ktSkipAnnotation   = regexp.MustCompile(`^@(?:[a-zA-Z0-9_.]+\.)?(?:Ignore|Disabled)\b`)
-	swiftFuncTestRe    = regexp.MustCompile(`\bfunc\s+(test\w*)\s*\(`)
+	swiftFuncTestRe    = regexp.MustCompile(`^func\s+(test\w*)\s*\(`)
 	swiftThrowXCTSkip  = regexp.MustCompile(`^throw\s+XCTSkip\s*\(`)
 	swiftDisabledAttr  = regexp.MustCompile(`^@Test\s*\([^)]*\.disabled\b`)
 )
@@ -1240,31 +1240,37 @@ func (r *SkipRule) checkSwiftSkips(filePath string, src string) []models.Violati
 				continue
 			}
 
-			if loc := swiftFuncTestRe.FindStringIndex(cleanSrc[i:]); loc != nil && loc[0] == 0 {
-				bracePos := strings.IndexByte(cleanSrc[i+loc[1]:], '{')
-				if bracePos != -1 {
-					bodyStart := i + loc[1] + bracePos + 1
-					j := bodyStart
-					for j < n && (cleanSrc[j] == ' ' || cleanSrc[j] == '\t' || cleanSrc[j] == '\r' || cleanSrc[j] == '\n') {
-						j++
-					}
-					if j < n && !inStringRange(j, strRanges) {
-						if match := swiftThrowXCTSkip.FindString(cleanSrc[j:]); match != "" {
-							stmtLine := 1 + strings.Count(src[:j], "\n")
-							violations = append(violations, models.Violation{
-								RuleID:     "GUARD-UNIV-SKIP",
-								Severity:   models.SeverityWarning,
-								FilePath:   filePath,
-								LineNumber: stmtLine,
-								Column:     1,
-								Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", "throw XCTSkip(...)"),
-								Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
-							})
+			// Anchor the func-test search at the current byte. Searching the
+			// whole remaining suffix from every byte made this loop quadratic
+			// (96% of the Swift engine profile sat here); the prefix check plus
+			// the anchored regex keeps the original semantics at linear cost.
+			if cleanSrc[i] == 'f' && strings.HasPrefix(cleanSrc[i:], "func") {
+				if loc := swiftFuncTestRe.FindStringIndex(cleanSrc[i:]); loc != nil {
+					bracePos := strings.IndexByte(cleanSrc[i+loc[1]:], '{')
+					if bracePos != -1 {
+						bodyStart := i + loc[1] + bracePos + 1
+						j := bodyStart
+						for j < n && (cleanSrc[j] == ' ' || cleanSrc[j] == '\t' || cleanSrc[j] == '\r' || cleanSrc[j] == '\n') {
+							j++
+						}
+						if j < n && !inStringRange(j, strRanges) {
+							if match := swiftThrowXCTSkip.FindString(cleanSrc[j:]); match != "" {
+								stmtLine := 1 + strings.Count(src[:j], "\n")
+								violations = append(violations, models.Violation{
+									RuleID:     "GUARD-UNIV-SKIP",
+									Severity:   models.SeverityWarning,
+									FilePath:   filePath,
+									LineNumber: stmtLine,
+									Column:     1,
+									Message:    fmt.Sprintf("Skipped test: '%s' disables a test; delete it or track the reason in a ticket.", "throw XCTSkip(...)"),
+									Suggestion: "Remove the skip directive and fix the test, or track the reason in a ticket.",
+								})
+							}
 						}
 					}
+					i += loc[1]
+					continue
 				}
-				i += loc[1]
-				continue
 			}
 		}
 

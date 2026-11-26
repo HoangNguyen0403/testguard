@@ -208,36 +208,8 @@ func (l *Lexer) TokenizeAll(includeComments bool) []Token {
 		if c == '/' && isRegexStarterToken(prevToken) {
 			start := l.pos
 			startLine := l.line
-			l.pos++ // skip leading /
-			inClass := false
-			closed := false
-
-			for l.pos < l.n {
-				rc := l.src[l.pos]
-				if rc == '\n' {
-					break // regex cannot cross unescaped newline
-				}
-				if rc == '\\' {
-					l.pos += 2
-					continue
-				}
-				if rc == '[' {
-					inClass = true
-				} else if rc == ']' {
-					inClass = false
-				} else if rc == '/' && !inClass {
-					l.pos++ // consume closing /
-					closed = true
-					break
-				}
-				l.pos++
-			}
-
-			if closed {
-				// consume trailing flags (g, i, m, s, u, y, d)
-				for l.pos < l.n && isIdentPart(l.src[l.pos]) {
-					l.pos++
-				}
+			if end, closed := l.scanRegex(start); closed {
+				l.pos = end
 				tok := Token{
 					Type:   TokenRegex,
 					Value:  l.src[start:l.pos],
@@ -248,7 +220,7 @@ func (l *Lexer) TokenizeAll(includeComments bool) []Token {
 				prevToken = tok.Value
 				continue
 			}
-			// Fallback: reset to start + 1 if not a valid regex
+			// Fallback: the slash is punctuation, not the start of a regex
 			l.pos = start
 		}
 
@@ -531,21 +503,7 @@ func (l *Lexer) TokenizeAll(includeComments bool) []Token {
 		// Multi-character punctuation: =>, ===, !==, ==, !=, <=, >=, &&, ||, ??, ?., ...
 		start := l.pos
 		startLine := l.line
-		l.pos++
-
-		if start+1 < l.n {
-			two := l.src[start : start+2]
-			switch two {
-			case "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=":
-				l.pos = start + 2
-				if start+2 < l.n {
-					three := l.src[start : start+3]
-					if three == "===" || three == "!==" || three == "..." {
-						l.pos = start + 3
-					}
-				}
-			}
-		}
+		l.pos += punctTokenLen(l.src, start)
 
 		tok := Token{
 			Type:   TokenPunct,
@@ -600,6 +558,62 @@ func (l *Lexer) scanQuoted(pos int) (int, bool) {
 	return l.n, false
 }
 
+// scanRegex consumes a regular-expression literal starting at pos, which must
+// hold '/', and returns the offset just past its pattern and flags, plus
+// whether it closed. Escaped characters and character classes are skipped, so
+// quotes, braces, backticks and slashes inside the pattern stay literal. An
+// unescaped newline ends the scan as unclosed: a regex cannot span lines.
+func (l *Lexer) scanRegex(pos int) (int, bool) {
+	inClass := false
+	for i := pos + 1; i < l.n; {
+		switch c := l.src[i]; {
+		case c == '\n':
+			return i, false
+		case c == '\\':
+			if i+1 < l.n && l.src[i+1] == '\n' {
+				l.line++
+			}
+			i += 2
+		case c == '[':
+			inClass = true
+			i++
+		case c == ']':
+			inClass = false
+			i++
+		case c == '/' && !inClass:
+			i++ // consume the closing /
+			for i < l.n && isIdentPart(l.src[i]) {
+				i++
+			}
+			return i, true
+		default:
+			i++
+		}
+	}
+	return l.n, false
+}
+
+// punctTokenLen returns the width of the punctuation token starting at start.
+// It is the single table for multi-character punctuation: the main token loop
+// and interpolation scanning share it, so a regex-vs-division decision after
+// `=>`, `&&` or `++` matches the token stream callers actually see.
+func punctTokenLen(src string, start int) int {
+	if start+1 >= len(src) {
+		return 1
+	}
+	switch src[start : start+2] {
+	case "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=", "*=", "/=":
+		if start+2 < len(src) {
+			switch src[start : start+3] {
+			case "===", "!==", "...":
+				return 3
+			}
+		}
+		return 2
+	}
+	return 1
+}
+
 // scanTemplate consumes a template literal starting at pos, which must hold a
 // backtick. Interpolations are scanned recursively, so a template nested inside
 // `${...}` and braces or backticks inside nested strings cannot end the literal
@@ -636,15 +650,20 @@ func (l *Lexer) scanTemplate(pos int) (int, bool) {
 
 // scanInterpolation consumes the expression of a `${` interpolation, starting
 // just past its opening brace, and returns the offset just past the matching
-// closing brace. Regex literals inside an interpolation are treated as plain
-// text; a brace inside one therefore surfaces as a lexical error instead of a
-// silently truncated scan.
+// closing brace. It tracks the preceding significant token so a regex literal
+// and a division operator are told apart with the same decision model as the
+// main token loop; a regex pattern is skipped with escape, character-class and
+// flag awareness, so its quotes, backticks, braces and slashes cannot end the
+// interpolation early. A construct that cannot be closed still returns false,
+// which surfaces as an unterminated template instead of a truncated scan.
 func (l *Lexer) scanInterpolation(pos int) (int, bool) {
 	depth := 1
+	prev := "{" // the `${` opening brace precedes the expression
 	for i := pos; i < l.n; {
 		switch c := l.src[i]; c {
 		case '{':
 			depth++
+			prev = "{"
 			i++
 		case '}':
 			depth--
@@ -652,17 +671,20 @@ func (l *Lexer) scanInterpolation(pos int) (int, bool) {
 			if depth == 0 {
 				return i, true
 			}
+			prev = "}"
 		case '`':
 			end, closed := l.scanTemplate(i)
 			if !closed {
 				return end, false
 			}
+			prev = l.src[i:end]
 			i = end
 		case '\'', '"':
 			end, closed := l.scanQuoted(i)
 			if !closed {
 				return end, false
 			}
+			prev = l.src[i:end]
 			i = end
 		case '/':
 			if i+1 < l.n && l.src[i+1] == '/' {
@@ -686,12 +708,42 @@ func (l *Lexer) scanInterpolation(pos int) (int, bool) {
 				}
 				continue
 			}
+			if isRegexStarterToken(prev) {
+				if end, closed := l.scanRegex(i); closed {
+					prev = l.src[i:end]
+					i = end
+					continue
+				}
+			}
+			if i+1 < l.n && l.src[i+1] == '=' {
+				prev = "/="
+				i += 2
+				continue
+			}
+			prev = "/"
 			i++
 		case '\n':
 			l.line++
 			i++
 		default:
-			i++
+			switch {
+			case isIdentStart(c):
+				start := i
+				for i < l.n && isIdentPart(l.src[i]) {
+					i++
+				}
+				prev = l.src[start:i]
+			case isDigit(c):
+				start := i
+				for i < l.n && (isIdentPart(l.src[i]) || l.src[i] == '.') {
+					i++
+				}
+				prev = l.src[start:i]
+			default:
+				width := punctTokenLen(l.src, i)
+				prev = l.src[i : i+width]
+				i += width
+			}
 		}
 	}
 	return l.n, false

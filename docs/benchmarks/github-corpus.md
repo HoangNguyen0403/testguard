@@ -71,7 +71,7 @@ Report the three denominators separately; none is a single "accuracy" number.
 
 [github-corpus-adjudications.json](github-corpus-adjudications.json) records six source-adjudicated rows per actual file language across 19 repositories, with pinned full commit SHA, primary and duplicate-partner locations, baseline/final presence, mechanism verdict, actionability verdict, detector decision and cited oracle evidence. It is agent adjudication of retained pinned source, not blind human ground truth; no upstream code was executed.
 
-Of the 36 rows: 26 are present in both reports, four are final-only and six are baseline-only. The reported mechanism is present in 23 rows and absent in 13. Source verdicts are 9 true positive, 20 false positive and 7 debatable; actionability is 9 actionable, 25 non-actionable and 2 debatable. **Mechanism presence is not the same as an actionable defect**—fixtures, no-throw contracts, compile-time checks and intentional controls can carry the reported syntax while remaining legitimate. Do not compute population precision, recall or a confidence interval from these rows.
+Of the 36 rows: 26 are present in both reports, four are final-only and six are baseline-only. The reported mechanism is present in 23 rows and absent in 13. The source review identified nine actionable findings, 20 false positives as defect claims, and seven debatable or unsupported cases. An informational disposition does not resolve an uncertain verdict. **Mechanism presence is not the same as an actionable defect**—fixtures, no-throw contracts, compile-time checks and intentional controls can carry the reported syntax while remaining legitimate. Do not compute population precision, recall or a confidence interval from these rows.
 
 ## Held-out and paired controls (proposed)
 
@@ -84,6 +84,18 @@ Before any blocking gate is considered:
 5. Report seeded detection over eligible seeds separately from natural-defect recall, with per-stratum denominators, unresolved labels and uncertainty.
 
 A future opt-in gate should qualify **one rule, one language and one supported runner at a time**, not inherit credibility from an aggregate finding count. Until then, use PR annotations for developer review and a distinct scan-health status for incomplete analysis.
+
+## Post-adjudication repair verification
+
+Rescanned all 26 unique pinned snapshots against the preceding `f032cb95…` binary. Repair binary SHA-256: `97225c5ed67404c8f510fdf8f08c09693c367b2ab604714350e9cb72d432dd19`. The ledger preserves the historical reports it reviewed; this section records the later repair.
+
+| Targeted false positive | Verified repair |
+|---|---|
+| Ollama `api/types_test.go:1047` — expected error called swallowed | Removed the warning for the adjacent fatal check against an independent table expectation. A self-derived expectation still emits the warning in a separate CLI control. |
+| Ponytail `pi-extension/test/extension.test.js:88` — substring check called existence-only | Removed the advisory. Tests retain alerts for bare truthiness, short-circuit bypasses and runtime-empty substrings. Across affected repositories, Ponytail removed 10 advisories and ECC removed 422; these are report deltas, not individually adjudicated false positives. |
+| Swift compiler `test/CAS/swift-scan-test.swift:58` — free fixture function treated as a test | Removed the blocker. The Swift compiler projection went from 199 to 169 declarations and 113 to 81 findings (33 removed, one added). The added `UNIV-ZERO` at `test/SILOptimizer/OSLogMandatoryOptTest.swift:568` is a FileCheck fixture method in a protocol extension, not a runtime test. Type-member XCTest recognition still relies on a name heuristic and does not establish runner membership. |
+
+All three target findings disappeared; all nine source-adjudicated actionable findings and all 21 first-wave mechanism-positive locations remained. File discovery, parse counts and exit codes were unchanged. `go test ./...` passed (1,028 tests), as did `go vet ./...`, the formatting check and the CLI build. Independent source rereview accepted the three bounded repairs; this was not a whole-change review or a population precision/recall study.
 
 ## Remaining limits and adoption risk
 

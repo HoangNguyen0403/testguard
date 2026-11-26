@@ -1,0 +1,595 @@
+{
+  "schema_version": 1,
+  "method": "Agent-adjudicated deterministic diagnostic sample: first eight ZERO and first two findings per other emitted rule; Gin all findings. Not a precision/recall estimate.",
+  "verdicts": {
+    "substantiated": "Reported lexical mechanism exists; not proof a test is redundant.",
+    "false_positive": "Source verification or captured context contradicts the finding.",
+    "debatable": "Literal heuristic applies but defect or severity is uncertain."
+  },
+  "labels": [
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/compiler-sfc/__tests__/compileScript/importUsageCheck.spec.ts",
+      "line": 155,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/reactivity/__tests__/computed.spec.ts",
+      "line": 473,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/apiOptions.spec.ts",
+      "line": 785,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/components/BaseTransition.spec.ts",
+      "line": 575,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/components/BaseTransition.spec.ts",
+      "line": 579,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/components/BaseTransition.spec.ts",
+      "line": 583,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/components/BaseTransition.spec.ts",
+      "line": 708,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/runtime-core/__tests__/components/BaseTransition.spec.ts",
+      "line": 712,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-01",
+      "path": "packages/compiler-core/__tests__/codegen.spec.ts",
+      "line": 468,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-01",
+      "path": "packages/compiler-core/__tests__/codegen.spec.ts",
+      "line": 490,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-02",
+      "path": "packages/compiler-core/__tests__/parse.spec.ts",
+      "line": 895,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-02",
+      "path": "packages/compiler-core/__tests__/parse.spec.ts",
+      "line": 940,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-01",
+      "path": "packages/compiler-sfc/__tests__/compileScript.spec.ts",
+      "line": 1582,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-01",
+      "path": "packages/reactivity/__tests__/readonly.spec.ts",
+      "line": 359,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-EXISTENCE-ONLY",
+      "path": "packages/compiler-sfc/__tests__/compileScript.spec.ts",
+      "line": 1214,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-EXISTENCE-ONLY",
+      "path": "packages/runtime-core/__tests__/hmr.spec.ts",
+      "line": 35,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-TAUTOLOGY",
+      "path": "packages/reactivity/__tests__/collections/shallowReadonly.spec.ts",
+      "line": 72,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-TAUTOLOGY",
+      "path": "packages/reactivity/__tests__/collections/shallowReadonly.spec.ts",
+      "line": 156,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-SELF-MOCK",
+      "path": "packages/reactivity/__tests__/computed.spec.ts",
+      "line": 1015,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-SELF-MOCK",
+      "path": "packages/reactivity/__tests__/ref.spec.ts",
+      "line": 409,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-CONDITIONAL-ASSERT",
+      "path": "packages/runtime-core/__tests__/components/Suspense.spec.ts",
+      "line": 870,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-TS-CONDITIONAL-ASSERT",
+      "path": "packages/runtime-core/__tests__/components/Suspense.spec.ts",
+      "line": 4754,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-REACT-02",
+      "path": "packages/runtime-core/__tests__/components/Teleport.spec.ts",
+      "line": 421,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-REACT-02",
+      "path": "packages/runtime-core/__tests__/hydration.spec.ts",
+      "line": 2275,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-UNIV-SKIP",
+      "path": "packages/runtime-dom/__tests__/customElement.spec.ts",
+      "line": 740,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-E2E-01",
+      "path": "packages/vue/__tests__/e2e/Transition.spec.ts",
+      "line": 432,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "vuejs/core",
+      "commit": "50aaa3c75d4caed0a73b85e870ed907a76f9ec44",
+      "rule": "GUARD-E2E-01",
+      "path": "packages/vue/__tests__/e2e/TransitionGroup.spec.ts",
+      "line": 464,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "rule": "GUARD-GO-EXISTENCE-ONLY",
+      "path": "context_test.go",
+      "line": 874,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "rule": "GUARD-GO-EXISTENCE-ONLY",
+      "path": "fs_test.go",
+      "line": 30,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "rule": "GUARD-UNIV-01",
+      "path": "githubapi_test.go",
+      "line": 462,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "tree_test.go",
+      "line": 533,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "gin-gonic/gin",
+      "commit": "0f09c3a9b4626d9fe9979cf4d0521d6ae32ab646",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "tree_test.go",
+      "line": 901,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "examples/flutter_firebase_login/ios/RunnerTests/RunnerTests.swift",
+      "line": 7,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/angular_bloc/test/bloc_pipe_test.dart",
+      "line": 110,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 28,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 34,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 40,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 46,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 52,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "packages/bloc/test/bloc_observer_test.dart",
+      "line": 58,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-DART-BLOC-DUPLICATE",
+      "path": "examples/flutter_login/test/authentication/authentication_bloc_test.dart",
+      "line": 81,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-DART-BLOC-DUPLICATE",
+      "path": "packages/bloc_test/test/bloc_bloc_test_test.dart",
+      "line": 96,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-01",
+      "path": "examples/flutter_shopping_cart/test/app_test.dart",
+      "line": 27,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-02",
+      "path": "packages/bloc_tools/test/src/lsp/text_document_test.dart",
+      "line": 307,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "felangel/bloc",
+      "commit": "654f15a566fe26a5c5d499c2b75a955d81eb8bca",
+      "rule": "GUARD-UNIV-TAUTOLOGY",
+      "path": "examples/flutter_complex_list/test/complex_list/models/item_test.dart",
+      "line": 8,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "android-test/src/androidTest/java/okhttp/android/test/OkHttpTest.kt",
+      "line": 554,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "android-test/src/androidTest/java/okhttp/android/test/OkHttpTest.kt",
+      "line": 743,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "android-test/src/androidTest/java/okhttp/android/test/OkHttpTest.kt",
+      "line": 765,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "mockwebserver-deprecated/src/test/java/okhttp3/mockwebserver/MockWebServerTest.kt",
+      "line": 213,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "mockwebserver-deprecated/src/test/java/okhttp3/mockwebserver/MockWebServerTest.kt",
+      "line": 418,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "mockwebserver-deprecated/src/test/java/okhttp3/mockwebserver/MockWebServerTest.kt",
+      "line": 424,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "mockwebserver-deprecated/src/test/java/okhttp3/mockwebserver/MockWebServerTest.kt",
+      "line": 430,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "mockwebserver-deprecated/src/test/java/okhttp3/mockwebserver/MockWebServerTest.kt",
+      "line": 489,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-01",
+      "path": "mockwebserver/src/test/java/mockwebserver3/RecordedRequestTest.kt",
+      "line": 118,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-01",
+      "path": "okhttp/src/commonTest/kotlin/okhttp3/internal/dns/DnsMessageReaderRecordedValuesTest.kt",
+      "line": 171,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-02",
+      "path": "okhttp-sse/src/test/java/okhttp3/sse/internal/ServerSentEventIteratorTest.kt",
+      "line": 262,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-02",
+      "path": "okhttp/src/commonTest/kotlin/okhttp3/internal/dns/DnsMessageReaderRecordedValuesTest.kt",
+      "line": 317,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-NAME",
+      "path": "okhttp/src/commonTest/kotlin/okhttp3/CompromisedIntermediateTest.kt",
+      "line": 169,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-NAME",
+      "path": "okhttp/src/jvmTest/kotlin/okhttp3/WebPlatformToAsciiTest.kt",
+      "line": 56,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-SKIP",
+      "path": "android-test/src/androidTest/java/okhttp/android/test/OkHttpTest.kt",
+      "line": 479,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "lysine-dev/okhttp",
+      "commit": "223a0cc71eebd4d58cd54fd8a53dfb19a48b6b7c",
+      "rule": "GUARD-UNIV-SKIP",
+      "path": "android-test/src/androidTest/java/okhttp/android/test/OkHttpTest.kt",
+      "line": 506,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/CachedResponseHandlerTests.swift",
+      "line": 223,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/CachedResponseHandlerTests.swift",
+      "line": 228,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/CachedResponseHandlerTests.swift",
+      "line": 233,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/ConcurrencyTests.swift",
+      "line": 45,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/LeaksTests.swift",
+      "line": 35,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/LeaksTests.swift",
+      "line": 71,
+      "verdict": "false_positive"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/ParameterEncoderTests.swift",
+      "line": 1116,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-ZERO",
+      "path": "Tests/ParameterEncoderTests.swift",
+      "line": 1121,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-01",
+      "path": "Tests/ConcurrencyTests.swift",
+      "line": 132,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-01",
+      "path": "Tests/ConcurrencyTests.swift",
+      "line": 332,
+      "verdict": "substantiated"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-02",
+      "path": "Tests/ParameterEncoderTests.swift",
+      "line": 1027,
+      "verdict": "debatable"
+    },
+    {
+      "repository": "Alamofire/Alamofire",
+      "commit": "dea4bab91767a971d6e112bc955c6a82295589b7",
+      "rule": "GUARD-UNIV-02",
+      "path": "Tests/ParameterEncoderTests.swift",
+      "line": 1039,
+      "verdict": "debatable"
+    }
+  ]
+}

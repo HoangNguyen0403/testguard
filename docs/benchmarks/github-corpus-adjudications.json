@@ -5,10 +5,6 @@
     "reviewer": "Premium advisor consultation (independent agent adjudication, not blind human ground truth)",
     "adjudication_basis": "Retained pinned source plus the actual *.before.json and *.final.json reports; no upstream code, script, dependency or mutation tool executed.",
     "sampling": "Purposive, not random. Strata were language, repository, rule and lane; within a stratum the first matching finding in original report order was taken; Gin contributed both removed findings; React selection was restricted to final-minus-baseline .js rows. Selection used report messages, then source and partners were read before comparing first-wave verdicts. Report identity was repository-relative path, line, rule and message.",
-    "report_roots": [
-      "/var/folders/bk/6qfpqsgs4vj31vdb4b0yq_f80000gp/T/testguard-top3-n3vwyxcx",
-      "/var/folders/bk/6qfpqsgs4vj31vdb4b0yq_f80000gp/T/testguard-github-om3ucb4m"
-    ],
     "baseline_binary_sha256": "4c5e61a5d15214079022924bc91921f4ee81864e98c494d0a96a1dc1d6965909",
     "final_binary_sha256": "f032cb95aa869eb9042d263de1fd72fa4b0b397dcfe535a951e60945dccde28b",
     "upstream_execution": false,
@@ -38,8 +34,8 @@
     },
     "actionability": {
       "actionable": 9,
-      "non_actionable": 25,
-      "debatable": 2
+      "non_actionable": 20,
+      "debatable": 7
     }
   },
   "rows": [
@@ -202,7 +198,7 @@
       "mechanism_present": "yes",
       "mechanism_note": "mechanism present but no demonstrated need",
       "source_test_verdict": "debatable",
-      "actionability": "non_actionable",
+      "actionability": "debatable",
       "detector_decision": "informational",
       "detector_decision_raw": "D / informational",
       "recommendation": "Keep as informational; do not treat the header-presence check as an actionable defect.",
@@ -229,7 +225,7 @@
       "mechanism_present": "yes",
       "mechanism_note": "fixture context",
       "source_test_verdict": "debatable",
-      "actionability": "non_actionable",
+      "actionability": "debatable",
       "detector_decision": "informational",
       "detector_decision_raw": "D / informational",
       "recommendation": "Keep as informational; do not classify a nested automated-test fixture as a proven zero-assertion defect.",
@@ -370,7 +366,7 @@
       "mechanism_present": "yes",
       "mechanism_note": "structural resemblance only",
       "source_test_verdict": "debatable",
-      "actionability": "non_actionable",
+      "actionability": "debatable",
       "detector_decision": "informational",
       "detector_decision_raw": "D / informational",
       "recommendation": "Keep as informational; do not convert structural resemblance into a deletion recommendation.",
@@ -667,7 +663,7 @@
       "mechanism_present": "yes",
       "mechanism_note": "disabled coverage is real; rationale documented",
       "source_test_verdict": "debatable",
-      "actionability": "non_actionable",
+      "actionability": "debatable",
       "detector_decision": "informational",
       "detector_decision_raw": "D / informational",
       "recommendation": "Track the coverage gap; do not blindly enable or delete the test.",
@@ -859,7 +855,7 @@
       "mechanism_present": "yes",
       "mechanism_note": "distinct parsing boundaries",
       "source_test_verdict": "debatable",
-      "actionability": "non_actionable",
+      "actionability": "debatable",
       "detector_decision": "informational",
       "detector_decision_raw": "D / informational",
       "recommendation": "Keep as informational; do not delete either test on shape alone.",

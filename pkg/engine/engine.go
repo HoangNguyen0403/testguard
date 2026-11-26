@@ -289,7 +289,7 @@ func (e *Engine) Run(opts Options) (*Result, error) {
 			if !isSupportedLanguageExtension(ext) {
 				continue
 			}
-			if !isTestFileName(filepath.Base(file)) {
+			if !isTestFilePath(file) {
 				continue
 			}
 

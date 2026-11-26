@@ -311,6 +311,143 @@ func TestExistenceOnlyRule(t *testing.T) {
 	if len(checker.Evaluate(unitNeg)) != 0 {
 		t.Errorf("expected 0 violations when value check is used")
 	}
+
+	// assert.ok around a string-content predicate pins content, so it is not
+	// existence-only (ponytail pi-extension/test/extension.test.js:96-97).
+	contentChecks := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "assert.ok direct includes",
+			body: `
+    assert.ok(r.systemPrompt.includes("PONYTAIL MODE ACTIVE"));
+`,
+		},
+		{
+			name: "assert.ok negated includes with message",
+			body: `
+    assert.ok(!r.systemPrompt.includes("undefined"), "prompt leaked undefined");
+`,
+		},
+		{
+			name: "assert.ok textual separator escape is non-empty",
+			body: `assert.ok(r.systemPrompt.includes("\u2028"));`,
+		},
+		{
+			name: "assert.ok content after separator continuation is non-empty",
+			body: "assert.ok(r.systemPrompt.includes(\"\\\u2028content\"));",
+		},
+	}
+	for _, tc := range contentChecks {
+		unit := parser.TestUnit{
+			Name:      tc.name,
+			FilePath:  "extension.test.js",
+			StartLine: 88,
+			RawBody:   tc.body,
+		}
+		if v := checker.Evaluate(unit); len(v) != 0 {
+			t.Errorf("%s: expected 0 violations for content predicate, got %d", tc.name, len(v))
+		}
+	}
+
+	// The credit is shape-bound: everything below is still existence-only.
+	stillExistence := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "assert.ok bare result",
+			body: `
+    const r = add(1, 2);
+    assert.ok(r);
+`,
+		},
+		{
+			name: "assert.ok bare field",
+			body: `
+    assert.ok(r.systemPrompt);
+`,
+		},
+		{
+			name: "assert.ok bare result with message",
+			body: `
+    const r = add(1, 2);
+    assert.ok(r, "must be set");
+`,
+		},
+		{
+			name: "assert.ok generic call wrapping includes",
+			body: `
+    assert.ok(validate(r.systemPrompt.includes("PONYTAIL MODE ACTIVE")));
+`,
+		},
+		{
+			name: "assert.ok vacuous empty substring",
+			body: `
+    assert.ok(r.systemPrompt.includes(""));
+`,
+		},
+		{
+			name: "assert.ok string literal only",
+			body: `
+    assert.ok("must be set");
+`,
+		},
+		{
+			name: "chai ok getter stays truthiness",
+			body: `
+    expect(r.systemPrompt).to.be.ok;
+`,
+		},
+		{
+			// Truthiness of the disjunction can hold while the substring check
+			// is false or never evaluated.
+			name: "assert.ok OR short-circuit around includes",
+			body: `
+    assert.ok(!!r || r.systemPrompt.includes("PONYTAIL MODE ACTIVE"));
+`,
+		},
+		{
+			name: "assert.ok assignment around includes",
+			body: `
+    assert.ok((flag = r.systemPrompt.includes("PONYTAIL MODE ACTIVE")));
+`,
+		},
+		{
+			name: "assert.ok ternary around includes",
+			body: `
+    assert.ok(flag ? r.systemPrompt.includes("a") : r.systemPrompt.includes("b"));
+`,
+		},
+		{
+			// A JS line continuation is stripped at runtime, so this literal is
+			// the empty string even though the raw token carries characters.
+			name: "assert.ok line-continuation-only literal is runtime empty",
+			body: "assert.ok(r.systemPrompt.includes(\"\\\n\"));",
+		},
+		{
+			// ECMAScript strips an escaped U+2028 line separator at runtime.
+			name: "assert.ok U+2028-continuation-only literal is runtime empty",
+			body: "assert.ok(r.systemPrompt.includes(\"\\\u2028\"));",
+		},
+		{
+			// ECMAScript strips an escaped U+2029 paragraph separator at runtime.
+			name: "assert.ok U+2029-continuation-only literal is runtime empty",
+			body: "assert.ok(r.systemPrompt.includes(\"\\\u2029\"));",
+		},
+	}
+	for _, tc := range stillExistence {
+		unit := parser.TestUnit{
+			Name:      tc.name,
+			FilePath:  "weak.test.ts",
+			StartLine: 88,
+			RawBody:   tc.body,
+		}
+		if v := checker.Evaluate(unit); len(v) != 1 {
+			t.Errorf("%s: expected 1 existence-only violation, got %d", tc.name, len(v))
+		}
+	}
 }
 
 func TestSelfMockRule(t *testing.T) {
@@ -1147,6 +1284,382 @@ func TestSelfMockRuleTokenAccuracy(t *testing.T) {
 			unit := parser.TestUnit{
 				Name:      tc.name,
 				FilePath:  "selfmock.test.ts",
+				StartLine: 4,
+				RawBody:   tc.body,
+			}
+			violations := checker.Evaluate(unit)
+			if len(violations) != tc.expected {
+				t.Fatalf("expected %d violations, got %d: %+v", tc.expected, len(violations), violations)
+			}
+			for _, v := range violations {
+				if v.RuleID != "GUARD-TS-SELF-MOCK" || v.Severity != models.SeverityWarning {
+					t.Errorf("unexpected violation identity: %s %s", v.RuleID, v.Severity)
+				}
+				if v.LineNumber != 4 {
+					t.Errorf("expected line 4, got %d", v.LineNumber)
+				}
+			}
+		})
+	}
+}
+
+// TestSelfMockRuleConciseCallbackAttribution pins that a mock invoked from a
+// concise arrow callback body belongs to the component or system under test,
+// never to the test scope, while genuine direct invocations on either side of
+// the callback stay attributable. Span bounding is exercised through nested,
+// parenthesized, comma-sequence, and ASI-separated forms so a fix cannot
+// simply ignore every test that contains an arrow.
+func TestSelfMockRuleConciseCallbackAttribution(t *testing.T) {
+	checker := typescript.NewSelfMockRule()
+
+	tests := []struct {
+		name     string
+		body     string
+		expected int
+	}{
+		{
+			name: "vue computed callback invocation",
+			body: `
+    const spy = jest.fn();
+    const total = computed(() => spy());
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "vue effect callback invocation",
+			body: `
+    const spy = jest.fn();
+    effect(() => spy());
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "nested call inside concise callback",
+			body: `
+    const spy = jest.fn();
+    onMounted(() => wrap(spy()));
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "parenthesized concise expression",
+			body: `
+    const spy = jest.fn();
+    onMounted(() => (spy()));
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "comma sequence concise expression",
+			body: `
+    const spy = jest.fn();
+    onMounted(() => (0, spy()));
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "nested concise arrow callback",
+			body: `
+    const spy = jest.fn();
+    onMounted(() => schedule(() => spy()));
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "object property mock inside concise callback",
+			body: `
+    const repo = { find: jest.fn() };
+    onMounted(() => repo.find());
+    expect(repo.find).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "braced callback invocation still ignored",
+			body: `
+    const spy = jest.fn();
+    watch(() => { spy(); });
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "nested braced callback invocation still ignored",
+			body: `
+    const spy = jest.fn();
+    watch(() => { schedule(() => { spy(); }); });
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "binary operator continuation across line break",
+			body: `
+    const spy = jest.fn();
+    const callback = () => 1 +
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "call result invocation is not a concise IIFE",
+			body: `
+    const spy = jest.fn();
+    register(() => spy())();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "nested function type direct initializer",
+			body: `
+    const spy = vi.fn();
+    const cb: () => () => void = spy();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "immediately invoked concise callback call",
+			body: `
+    const spy = vi.fn();
+    (() => spy()).call(undefined);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "immediately invoked concise callback apply",
+			body: `
+    const spy = vi.fn();
+    (() => spy()).apply(undefined, []);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "immediately invoked concise callback optional call",
+			body: `
+    const spy = vi.fn();
+    (() => spy())?.();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "immediately invoked nested grouped concise callback",
+			body: `
+    const spy = vi.fn();
+    (((() => spy())))();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "deferred callback unary not continues across line break",
+			body: `
+    const spy = vi.fn();
+    const callback = () => !
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "deferred callback typeof continues across line break",
+			body: `
+    const spy = vi.fn();
+    const callback = () => typeof
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "deferred callback void continues across line break",
+			body: `
+    const spy = vi.fn();
+    const callback = () => void
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "deferred callback bitwise not continues across line break",
+			body: `
+    const spy = vi.fn();
+    const callback = () => ~
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "deferred callback await continues across line break",
+			body: `
+    const spy = vi.fn();
+    const callback = async () => await
+      spy();
+    consume(callback);
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 0,
+		},
+		{
+			name: "direct call after ASI prefix not expression",
+			body: `
+    const spy = vi.fn()
+    const callback = () => 0
+    !spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after ASI typeof expression",
+			body: `
+    const spy = vi.fn()
+    const callback = () => 0
+    typeof spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after ASI void expression",
+			body: `
+    const spy = vi.fn()
+    const callback = () => 0
+    void spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "typed initializer is not a deferred body",
+			body: `
+    const spy = vi.fn();
+    const callback: () => void = spy();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "immediately invoked concise callback",
+			body: `
+    const spy = vi.fn();
+    ;(() => spy())();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call before concise callback",
+			body: `
+    const spy = jest.fn();
+    spy();
+    onMounted(() => spy());
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after concise callback",
+			body: `
+    const spy = jest.fn();
+    onMounted(() => spy());
+    spy();
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after ASI newline boundary",
+			body: `
+    const spy = jest.fn()
+    onMounted(() => spy())
+    spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after standalone concise arrow ASI boundary",
+			body: `
+    const spy = jest.fn()
+    const handler = () => spy()
+    spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "direct argument before callback",
+			body: `
+    const spy = jest.fn();
+    register(spy(), () => spy());
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct argument after callback",
+			body: `
+    const spy = jest.fn();
+    register(() => spy(), spy());
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call after comma arguments then ASI newline",
+			body: `
+    const spy = jest.fn()
+    register(() => spy(), spy())
+    spy()
+    expect(spy).toHaveBeenCalled()
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call in object literal argument",
+			body: `
+    const spy = jest.fn();
+    register(() => spy(), { onDone: spy() });
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+		{
+			name: "direct call before braced callback",
+			body: `
+    const spy = jest.fn();
+    spy();
+    watch(() => { spy(); });
+    expect(spy).toHaveBeenCalled();
+`,
+			expected: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			unit := parser.TestUnit{
+				Name:      tc.name,
+				FilePath:  "selfmock-callback.test.ts",
 				StartLine: 4,
 				RawBody:   tc.body,
 			}
