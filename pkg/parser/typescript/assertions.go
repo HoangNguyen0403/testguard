@@ -843,6 +843,54 @@ func skipTypeAnnotation(matcher tokenMatcher, tokens []Token, idx int) (int, boo
 	return 0, false
 }
 
+// typeBracePredecessors lists the tokens after which a `{` inside a return
+// type annotation opens an object type literal rather than the function body.
+var typeBracePredecessors = map[string]bool{
+	":": true, "|": true, "&": true, ",": true, "(": true, "[": true,
+	"<": true, "=>": true, "?": true,
+}
+
+// skipReturnType advances past an optional `: Type` return annotation on a
+// function signature, returning the boundary token index: `=>` for an arrow or
+// `{` for a named function body. Balanced groups are skipped with the matcher
+// so generic, array, and object type annotations stay inside the annotation.
+func skipReturnType(matcher tokenMatcher, tokens []Token, idx int, wantArrow bool) (int, bool) {
+	if idx >= len(tokens) || tokens[idx].Value != ":" {
+		return idx, true
+	}
+	for k := idx + 1; k < len(tokens); k++ {
+		switch tokens[k].Value {
+		case "(", "[", "<":
+			closeIdx := matcher.closing(k)
+			if closeIdx == -1 {
+				return 0, false
+			}
+			k = closeIdx
+		case "{":
+			if k > 0 && typeBracePredecessors[tokens[k-1].Value] {
+				closeIdx := matcher.closing(k)
+				if closeIdx == -1 {
+					return 0, false
+				}
+				k = closeIdx
+				continue
+			}
+			if wantArrow {
+				return 0, false
+			}
+			return k, true
+		case "=>":
+			if wantArrow {
+				return k, true
+			}
+			return 0, false
+		case ";", "=", ")", "}":
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
 // helperBodyAt returns the name and body range of an asserting-helper
 // declaration starting at token i: a [async] function declaration or a
 // const/let/var binding of a function or arrow, with or without a type
@@ -864,15 +912,19 @@ func helperBodyAt(src string, tokens []Token, matcher tokenMatcher, i int) (stri
 			return "", helperScope{}
 		}
 		closeParen := matcher.closing(openParen)
-		if closeParen == -1 || closeParen+1 >= n || tokens[closeParen+1].Value != "{" {
+		if closeParen == -1 {
 			return "", helperScope{}
 		}
-		closeBrace := matcher.closing(closeParen + 1)
+		bodyIdx, ok := skipReturnType(matcher, tokens, closeParen+1, false)
+		if !ok || bodyIdx >= n || tokens[bodyIdx].Value != "{" {
+			return "", helperScope{}
+		}
+		closeBrace := matcher.closing(bodyIdx)
 		if closeBrace == -1 {
 			return "", helperScope{}
 		}
 		return tokens[nameIdx].Value, helperScope{
-			start: tokens[closeParen+1].Offset,
+			start: tokens[bodyIdx].Offset,
 			end:   tokens[closeBrace].Offset + 1,
 		}
 	}
@@ -901,23 +953,29 @@ func helperBodyAt(src string, tokens []Token, matcher tokenMatcher, i int) (stri
 			return "", helperScope{}
 		}
 		closeParen := matcher.closing(openParen)
-		if closeParen == -1 || closeParen+1 >= n || tokens[closeParen+1].Value != "{" {
+		if closeParen == -1 {
 			return "", helperScope{}
 		}
-		closeBrace := matcher.closing(closeParen + 1)
+		bodyIdx, ok := skipReturnType(matcher, tokens, closeParen+1, false)
+		if !ok || bodyIdx >= n || tokens[bodyIdx].Value != "{" {
+			return "", helperScope{}
+		}
+		closeBrace := matcher.closing(bodyIdx)
 		if closeBrace == -1 {
 			return "", helperScope{}
 		}
 		return name, helperScope{
-			start: tokens[closeParen+1].Offset,
+			start: tokens[bodyIdx].Offset,
 			end:   tokens[closeBrace].Offset + 1,
 		}
 	}
 
 	arrowIdx := -1
 	if tokens[rhsIdx].Value == "(" {
-		if closeParen := matcher.closing(rhsIdx); closeParen != -1 && closeParen+1 < n && tokens[closeParen+1].Value == "=>" {
-			arrowIdx = closeParen + 1
+		if closeParen := matcher.closing(rhsIdx); closeParen != -1 {
+			if idx, ok := skipReturnType(matcher, tokens, closeParen+1, true); ok && idx < n && tokens[idx].Value == "=>" {
+				arrowIdx = idx
+			}
 		}
 	} else if tokens[rhsIdx].Type == TokenIdent && rhsIdx+1 < n && tokens[rhsIdx+1].Value == "=>" {
 		arrowIdx = rhsIdx + 1

@@ -340,3 +340,111 @@ func TestDiscoverScopeRecognizesCypressPlaywrightAndScriptVariants(t *testing.T)
 		t.Errorf("expected %d discovered test files, got %d", len(names), res.DiscoveredFiles)
 	}
 }
+
+func TestDiscoverScopeHyphenTestFilesInTestsDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	testsDir := filepath.Join(tmpDir, "__tests__")
+	nestedDir := filepath.Join(testsDir, "legacy")
+	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+		t.Fatalf("unable to create __tests__ fixture directories: %v", err)
+	}
+
+	// React-conventional candidates: hyphen "-test" scripts under __tests__ plus
+	// an existing dot-infix file that must keep its current classification.
+	candidates := []string{
+		filepath.Join(testsDir, "Button-test.js"),
+		filepath.Join(testsDir, "Button-test.ts"),
+		filepath.Join(nestedDir, "Widget-test.jsx"),
+		filepath.Join(testsDir, "Button.test.js"),
+	}
+	for _, path := range candidates {
+		if err := os.WriteFile(path, []byte("it('x', () => { expect(1).toBe(1); });\n"), 0644); err != nil {
+			t.Fatalf("unable to write candidate fixture %s: %v", path, err)
+		}
+	}
+
+	// Hyphen "-test" names must not become tests by suffix alone, and helpers
+	// merely living under __tests__ are not tests.
+	nonTests := []string{
+		filepath.Join(tmpDir, "build-and-test.js"),
+		filepath.Join(tmpDir, ".vscode-test.mjs"),
+		filepath.Join(tmpDir, "Button-test.js"),
+		filepath.Join(testsDir, "helpers.js"),
+	}
+	for _, path := range nonTests {
+		if err := os.WriteFile(path, []byte("module.exports = {};\n"), 0644); err != nil {
+			t.Fatalf("unable to write non-test fixture %s: %v", path, err)
+		}
+	}
+
+	adapters := []parser.LanguageAdapter{dart.NewAdapter(), typescript.NewAdapter()}
+
+	candidateSet := func(res *engine.DiscoveryResult) map[string]bool {
+		set := make(map[string]bool, len(res.CandidateFiles))
+		for _, file := range res.CandidateFiles {
+			rel, err := filepath.Rel(tmpDir, file)
+			if err != nil {
+				rel = file
+			}
+			set[filepath.ToSlash(rel)] = true
+		}
+		return set
+	}
+
+	// 1. Full directory scan discovers every candidate once and nothing else.
+	res := engine.DiscoverScope([]string{tmpDir}, adapters, nil)
+	found := candidateSet(res)
+	if len(found) != len(candidates) || len(res.CandidateFiles) != len(candidates) {
+		t.Fatalf("expected exactly %d candidates, got %d (%+v)", len(candidates), len(res.CandidateFiles), res.CandidateFiles)
+	}
+	for _, path := range candidates {
+		rel, err := filepath.Rel(tmpDir, path)
+		if err != nil {
+			t.Fatalf("unable to express fixture %s relative to root: %v", path, err)
+		}
+		if !found[filepath.ToSlash(rel)] {
+			t.Errorf("expected %s to be discovered; candidates: %+v", rel, res.CandidateFiles)
+		}
+	}
+	for _, path := range nonTests {
+		rel, err := filepath.Rel(tmpDir, path)
+		if err != nil {
+			t.Fatalf("unable to express fixture %s relative to root: %v", path, err)
+		}
+		if found[filepath.ToSlash(rel)] {
+			t.Errorf("expected %s to stay out of the candidate set", rel)
+		}
+	}
+	if res.DiscoveredFiles != len(candidates) {
+		t.Errorf("expected %d discovered test files, got %d", len(candidates), res.DiscoveredFiles)
+	}
+
+	// 2. Overlapping roots resolve the same candidates exactly once.
+	resOverlap := engine.DiscoverScope([]string{tmpDir, testsDir}, adapters, nil)
+	if len(resOverlap.CandidateFiles) != len(candidates) || resOverlap.DiscoveredFiles != len(candidates) {
+		t.Errorf("expected %d unique candidates across overlapping roots, got %d candidates / %d discovered",
+			len(candidates), len(resOverlap.CandidateFiles), resOverlap.DiscoveredFiles)
+	}
+
+	// 3. Explicit paths use the same path-aware gate as directory walks.
+	explicitCandidate := filepath.Join(testsDir, "Button-test.js")
+	resExplicit := engine.DiscoverScope([]string{explicitCandidate}, adapters, nil)
+	if len(resExplicit.CandidateFiles) != 1 || filepath.Base(resExplicit.CandidateFiles[0]) != "Button-test.js" {
+		t.Errorf("expected explicit __tests__/Button-test.js to be discovered, got %+v", resExplicit.CandidateFiles)
+	}
+
+	explicitScript := filepath.Join(tmpDir, "build-and-test.js")
+	resScript := engine.DiscoverScope([]string{explicitScript}, adapters, nil)
+	if len(resScript.CandidateFiles) != 0 {
+		t.Errorf("expected explicit root build-and-test.js to stay out of candidates, got %+v", resScript.CandidateFiles)
+	}
+	hasNonTest := false
+	for _, ex := range resScript.Excluded {
+		if ex.Reason == "non_test" && filepath.Base(ex.Path) == "build-and-test.js" {
+			hasNonTest = true
+		}
+	}
+	if !hasNonTest {
+		t.Errorf("expected non_test exclusion for explicit build-and-test.js, got %+v", resScript.Excluded)
+	}
+}

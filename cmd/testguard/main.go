@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	version = "0.1.5"
+	version = "0.1.7"
 	commit  = "none"
 	date    = "unknown"
 	repo    = "HoangNguyen0403/testguard"

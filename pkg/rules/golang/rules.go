@@ -207,10 +207,359 @@ func isNilIdent(expr ast.Expr) bool {
 	return false
 }
 
+// fatalGuardReturns maps each bare-return error check to the structurally
+// fitting fatal guard that immediately precedes it in the same statement list.
+// Only candidate adjacent if/if pairs are stored and the map stays nil when a
+// body has none. Adjacency comes from list order, never from line numbers.
+func fatalGuardReturns(body *ast.BlockStmt) map[*ast.IfStmt]*ast.IfStmt {
+	var guards map[*ast.IfStmt]*ast.IfStmt
+	if body == nil {
+		return nil
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		var list []ast.Stmt
+		switch stmt := n.(type) {
+		case *ast.BlockStmt:
+			list = stmt.List
+		case *ast.CaseClause:
+			list = stmt.Body
+		case *ast.CommClause:
+			list = stmt.Body
+		}
+		for i := 1; i < len(list); i++ {
+			guard, ok := list[i-1].(*ast.IfStmt)
+			if !ok || !isFatalGuardShape(guard) {
+				continue
+			}
+			if !isBareReturnErrorCheck(list[i]) {
+				continue
+			}
+			if guards == nil {
+				guards = make(map[*ast.IfStmt]*ast.IfStmt)
+			}
+			guards[list[i].(*ast.IfStmt)] = guard
+		}
+		return true
+	})
+	return guards
+}
+
+// isFatalGuardShape reports whether stmt can only abort the test when its
+// condition holds: no else branch and a single fatal testing call.
+func isFatalGuardShape(stmt *ast.IfStmt) bool {
+	if stmt.Else != nil || stmt.Body == nil || len(stmt.Body.List) != 1 {
+		return false
+	}
+	exprStmt, ok := stmt.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Fatal", "Fatalf", "FailNow":
+		return true
+	}
+	return false
+}
+
+// isBareReturnErrorCheck reports whether stmt is `if cond { return }`. The
+// if-init must be absent: `if err = operation2(); err != nil { return }` reuses
+// the guarded binding for a new value, so it cannot inherit the exemption.
+func isBareReturnErrorCheck(stmt ast.Stmt) bool {
+	ifStmt, ok := stmt.(*ast.IfStmt)
+	if !ok || ifStmt.Init != nil || ifStmt.Else != nil || ifStmt.Body == nil || len(ifStmt.Body.List) != 1 {
+		return false
+	}
+	retStmt, ok := ifStmt.Body.List[0].(*ast.ReturnStmt)
+	return ok && len(retStmt.Results) == 0
+}
+
+// isVerifiedExpectedErrorReturn reports whether guard is the adjacent dominating
+// expected-error mismatch check that already fails the test for errIdent. In
+// `if (err != nil) != expectErr { t.Fatalf(...) }` the fatal call aborts on any
+// mismatch, so the following bare `if err != nil { return }` is a legitimate
+// "expected error, nothing more to assert" exit rather than a swallowed error.
+// The returning if and mismatch guard must not initialize or reassign bindings.
+func isVerifiedExpectedErrorReturn(
+	guard *ast.IfStmt,
+	errIdent *ast.Ident,
+	inputFacts expectedErrorInputFacts,
+	testingParamObjs map[*ast.Object]bool,
+	suiteRecvObj *ast.Object,
+) bool {
+	if guard == nil || guard.Init != nil || errIdent == nil || errIdent.Obj == nil {
+		return false
+	}
+	if !isExpectedErrorMismatch(guard.Cond, errIdent, guard, inputFacts) {
+		return false
+	}
+	exprStmt, ok := guard.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	return isFatalTestingCall(call, testingParamObjs, suiteRecvObj)
+}
+
+// isExpectedErrorMismatch compares the nil-ness of the same error binding
+// against a distinct, stable test-input flag.
+func isExpectedErrorMismatch(cond ast.Expr, errIdent *ast.Ident, guard *ast.IfStmt, inputFacts expectedErrorInputFacts) bool {
+	bin, ok := cond.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.NEQ {
+		return false
+	}
+	leftIsNilness := isNilComparisonOf(bin.X, errIdent)
+	rightIsNilness := isNilComparisonOf(bin.Y, errIdent)
+	if leftIsNilness == rightIsNilness {
+		return false
+	}
+	other := bin.Y
+	if rightIsNilness {
+		other = bin.X
+	}
+	return isExpectedErrorFlag(other, errIdent, guard, inputFacts)
+}
+
+type expectedErrorInputFacts struct {
+	firstWrite   map[*ast.Object]token.Pos
+	dependencies map[*ast.Object]map[*ast.Object]token.Pos
+}
+
+// collectExpectedErrorInputFacts scans once for writes and direct RHS
+// dependencies. The enclosing test AST is shared with t.Run closures so writes
+// to captured test inputs are not lost at the closure boundary.
+func collectExpectedErrorInputFacts(body *ast.BlockStmt) expectedErrorInputFacts {
+	facts := expectedErrorInputFacts{
+		firstWrite:   make(map[*ast.Object]token.Pos),
+		dependencies: make(map[*ast.Object]map[*ast.Object]token.Pos),
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.AssignStmt:
+			isRangeBinding := stmt.Tok == token.DEFINE && len(stmt.Rhs) == 1 &&
+				isRangeExpr(stmt.Rhs[0])
+			for _, lhs := range stmt.Lhs {
+				object := assignedRootObject(lhs)
+				if object == nil {
+					continue
+				}
+				if !isRangeBinding && (facts.firstWrite[object] == token.NoPos || stmt.Pos() < facts.firstWrite[object]) {
+					facts.firstWrite[object] = stmt.Pos()
+				}
+				for _, rhs := range stmt.Rhs {
+					ast.Inspect(rhs, func(rhsNode ast.Node) bool {
+						ident, ok := rhsNode.(*ast.Ident)
+						if !ok || ident.Obj == nil {
+							return true
+						}
+						byDependency := facts.dependencies[object]
+						if byDependency == nil {
+							byDependency = make(map[*ast.Object]token.Pos)
+							facts.dependencies[object] = byDependency
+						}
+						if byDependency[ident.Obj] == token.NoPos || stmt.Pos() < byDependency[ident.Obj] {
+							byDependency[ident.Obj] = stmt.Pos()
+						}
+						return true
+					})
+				}
+			}
+		case *ast.IncDecStmt:
+			object := assignedRootObject(stmt.X)
+			if object != nil && (facts.firstWrite[object] == token.NoPos || stmt.Pos() < facts.firstWrite[object]) {
+				facts.firstWrite[object] = stmt.Pos()
+			}
+		}
+		return true
+	})
+	return facts
+}
+
+func isRangeExpr(expr ast.Expr) bool {
+	unary, ok := expr.(*ast.UnaryExpr)
+	return ok && unary.Op == token.RANGE
+}
+
+func assignedRootObject(expr ast.Expr) *ast.Object {
+	switch target := expr.(type) {
+	case *ast.Ident:
+		return target.Obj
+	case *ast.SelectorExpr:
+		return assignedRootObject(target.X)
+	case *ast.IndexExpr:
+		return assignedRootObject(target.X)
+	case *ast.IndexListExpr:
+		return assignedRootObject(target.X)
+	case *ast.StarExpr:
+		return assignedRootObject(target.X)
+	default:
+		return nil
+	}
+}
+
+// isExpectedErrorFlag accepts only resolved parameters, receivers, and range
+// inputs, and rejects any input mutated before the mismatch check.
+func isExpectedErrorFlag(expr ast.Expr, errIdent *ast.Ident, guard *ast.IfStmt, facts expectedErrorInputFacts) bool {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	if unary, ok := expr.(*ast.UnaryExpr); ok {
+		if unary.Op != token.NOT {
+			return false
+		}
+		expr = unary.X
+		for {
+			paren, ok := expr.(*ast.ParenExpr)
+			if !ok {
+				break
+			}
+			expr = paren.X
+		}
+	}
+	if containsSameErrorBinding(expr, errIdent) {
+		return false
+	}
+	var root *ast.Ident
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		root = typed
+	case *ast.SelectorExpr:
+		root, _ = typed.X.(*ast.Ident)
+	default:
+		return false
+	}
+	if root == nil || root.Obj == nil {
+		return false
+	}
+	switch decl := root.Obj.Decl.(type) {
+	case *ast.Field:
+	case *ast.AssignStmt:
+		if decl.Tok != token.DEFINE || len(decl.Rhs) != 1 {
+			return false
+		}
+		rangeExpr, ok := decl.Rhs[0].(*ast.UnaryExpr)
+		if !ok || rangeExpr.Op != token.RANGE || decl.Pos() > errIdent.Obj.Pos() {
+			return false
+		}
+		if containsSameErrorBinding(rangeExpr.X, errIdent) ||
+			rangeSourceDependsOnError(rangeExpr.X, decl.Pos(), errIdent.Obj, facts) {
+			return false
+		}
+	default:
+		return false
+	}
+	writePos := facts.firstWrite[root.Obj]
+	return writePos == token.NoPos || writePos >= guard.Pos()
+}
+
+func rangeSourceDependsOnError(source ast.Expr, rangePos token.Pos, errObject *ast.Object, facts expectedErrorInputFacts) bool {
+	sourceIdent, ok := source.(*ast.Ident)
+	if !ok || sourceIdent.Obj == nil {
+		return false
+	}
+	errWritePos := facts.dependencies[sourceIdent.Obj][errObject]
+	return errWritePos != token.NoPos && errWritePos < rangePos
+}
+
+// isNilComparisonOf reports whether expr is `err != nil` or `err == nil` for the
+// same error binding, allowing redundant parentheses.
+func isNilComparisonOf(expr ast.Expr, errIdent *ast.Ident) bool {
+	inner := expr
+	for {
+		paren, ok := inner.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		inner = paren.X
+	}
+	bin, ok := inner.(*ast.BinaryExpr)
+	if !ok || (bin.Op != token.NEQ && bin.Op != token.EQL) {
+		return false
+	}
+	if sameErrorBinding(bin.X, errIdent) && isNilIdent(bin.Y) {
+		return true
+	}
+	return sameErrorBinding(bin.Y, errIdent) && isNilIdent(bin.X)
+}
+
+// sameErrorBinding reports whether expr is the same declared error object.
+func sameErrorBinding(expr ast.Expr, errIdent *ast.Ident) bool {
+	ident, ok := expr.(*ast.Ident)
+	if !ok || ident.Obj == nil || errIdent == nil {
+		return false
+	}
+	return ident.Obj == errIdent.Obj
+}
+
+func containsSameErrorBinding(expr ast.Expr, errIdent *ast.Ident) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if ident, ok := n.(*ast.Ident); ok && ident.Obj != nil && errIdent != nil && ident.Obj == errIdent.Obj {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// isFatalTestingCall reports whether call aborts the test through the same
+// testing receiver (`t.Fatal`, `t.Fatalf`, `t.FailNow`, or `s.T().Fatal*`).
+func isFatalTestingCall(call *ast.CallExpr, testingParamObjs map[*ast.Object]bool, suiteRecvObj *ast.Object) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Fatal", "Fatalf", "FailNow":
+	default:
+		return false
+	}
+	return isTestingReceiverExpr(sel.X, testingParamObjs, suiteRecvObj)
+}
+
+func isTestingReceiverExpr(expr ast.Expr, testingParamObjs map[*ast.Object]bool, suiteRecvObj *ast.Object) bool {
+	if ident, ok := expr.(*ast.Ident); ok {
+		if ident.Obj == nil {
+			return false
+		}
+		return testingParamObjs[ident.Obj] || (suiteRecvObj != nil && ident.Obj == suiteRecvObj)
+	}
+	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 0 {
+		if innerSel, ok := call.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+			if ident, ok := innerSel.X.(*ast.Ident); ok && suiteRecvObj != nil && ident.Obj == suiteRecvObj {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func inspectBlockForSwallowedErrors(
 	fset *token.FileSet,
 	body *ast.BlockStmt,
 	unit parser.TestUnit,
+	inputFacts expectedErrorInputFacts,
 	testingParamObjs map[*ast.Object]bool,
 	suiteRecvObj *ast.Object,
 ) []models.Violation {
@@ -254,6 +603,7 @@ func inspectBlockForSwallowedErrors(
 		return true
 	})
 
+	guards := fatalGuardReturns(body)
 	seenLines := make(map[int]bool)
 
 	ast.Inspect(body, func(n ast.Node) bool {
@@ -307,7 +657,7 @@ func inspectBlockForSwallowedErrors(
 						} else if right, ok := bin.Y.(*ast.Ident); ok && isNilIdent(bin.X) && callAssignedVars[right.Name] {
 							errIdent = right
 						}
-						if errIdent != nil {
+						if errIdent != nil && !isVerifiedExpectedErrorReturn(guards[stmt], errIdent, inputFacts, testingParamObjs, suiteRecvObj) {
 							line, col := getNodeLineAndColumn(fset, stmt, unit)
 							if !seenLines[line] {
 								seenLines[line] = true
@@ -343,7 +693,7 @@ func inspectBlockForSwallowedErrors(
 				}
 			}
 		}
-		closureViolations := inspectBlockForSwallowedErrors(fset, fnLit.Body, unit, closureTestingParams, suiteRecvObj)
+		closureViolations := inspectBlockForSwallowedErrors(fset, fnLit.Body, unit, inputFacts, closureTestingParams, suiteRecvObj)
 		violations = append(violations, closureViolations...)
 	}
 
@@ -382,7 +732,8 @@ func (r *SwallowedErrorRule) Evaluate(unit parser.TestUnit) []models.Violation {
 		}
 	}
 
-	return inspectBlockForSwallowedErrors(fset, fn.Body, unit, testingParamObjs, suiteRecvObj)
+	inputFacts := collectExpectedErrorInputFacts(fn.Body)
+	return inspectBlockForSwallowedErrors(fset, fn.Body, unit, inputFacts, testingParamObjs, suiteRecvObj)
 }
 
 // TableDuplicateRule detects identical duplicate rows in Go table-driven tests.
@@ -499,7 +850,79 @@ func isRecognizedTestingParam(expr ast.Expr, fileImports map[string]string) bool
 	return false
 }
 
-func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.CompositeLit) (string, string) {
+func isNameLikeField(name string) bool {
+	switch strings.ToLower(name) {
+	case "name", "desc", "description", "title":
+		return true
+	}
+	return false
+}
+
+// isTestReportingCall reports whether call is a method on the recognized
+// testing parameter or suite receiver (t.Run, t.Errorf, b.Logf, s.T().Fatal,
+// etc.). Labels passed only to these helpers remain cosmetic.
+func isTestReportingCall(call *ast.CallExpr, testingParamObjs map[*ast.Object]bool, suiteRecvObj *ast.Object) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if id, ok := sel.X.(*ast.Ident); ok {
+		if id.Obj == nil {
+			return false
+		}
+		return testingParamObjs[id.Obj] || (suiteRecvObj != nil && id.Obj == suiteRecvObj)
+	}
+	// Suite pattern s.T().Run / s.T().Errorf
+	if innerCall, ok := sel.X.(*ast.CallExpr); ok {
+		if innerSel, ok := innerCall.Fun.(*ast.SelectorExpr); ok && innerSel.Sel.Name == "T" {
+			if id, ok := innerSel.X.(*ast.Ident); ok && id.Obj != nil && suiteRecvObj != nil && id.Obj == suiteRecvObj {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rowNameInputFields returns the lower-cased name-like row fields that the
+// range body consumes as call arguments outside the test runner/reporting
+// helpers. Binding identity comes from the parser-resolved ast.Object, so a
+// same-spelled shadowed row is never credited.
+func rowNameInputFields(rng *ast.RangeStmt, rowIdentObj *ast.Object, testingParamObjs map[*ast.Object]bool, suiteRecvObj *ast.Object) map[string]bool {
+	if rowIdentObj == nil {
+		return nil
+	}
+	fields := make(map[string]bool)
+	ast.Inspect(rng.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isTestReportingCall(call, testingParamObjs, suiteRecvObj) {
+			return true
+		}
+		for _, arg := range call.Args {
+			ast.Inspect(arg, func(an ast.Node) bool {
+				sel, ok := an.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if ok && id.Obj == rowIdentObj && isNameLikeField(sel.Sel.Name) {
+					fields[strings.ToLower(sel.Sel.Name)] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return fields
+}
+
+// normalizeRowContent renders a row literal into a comparison key. Nominal
+// name/desc/title fields are stripped as cosmetic labels unless the field is
+// listed in retainedNameFields because the loop body consumes that row field as
+// a call argument (a genuine test input).
+func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.CompositeLit, retainedNameFields map[string]bool) (string, string) {
 	var rowLit *ast.CompositeLit
 	switch e := elt.(type) {
 	case *ast.CompositeLit:
@@ -522,7 +945,7 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 	_ = format.Node(&fullBuf, fset, elt)
 	fullContent := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(fullBuf.String()), "{"), "}"))
 
-	nameFieldIndex := -1
+	nameFieldIndexes := make(map[int]string)
 	if compLit != nil {
 		if arrType, ok := compLit.Type.(*ast.ArrayType); ok {
 			var st *ast.StructType
@@ -545,9 +968,8 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 						fieldIdx++
 					} else {
 						for _, name := range field.Names {
-							low := strings.ToLower(name.Name)
-							if low == "name" || low == "desc" || low == "description" || low == "title" {
-								nameFieldIndex = fieldIdx
+							if isNameLikeField(name.Name) {
+								nameFieldIndexes[fieldIdx] = strings.ToLower(name.Name)
 							}
 							fieldIdx++
 						}
@@ -562,7 +984,7 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 		if kv, ok := f.(*ast.KeyValueExpr); ok {
 			if kIdent, ok := kv.Key.(*ast.Ident); ok {
 				low := strings.ToLower(kIdent.Name)
-				if low == "name" || low == "desc" || low == "description" || low == "title" {
+				if isNameLikeField(kIdent.Name) && !retainedNameFields[low] {
 					continue
 				}
 			}
@@ -570,7 +992,7 @@ func normalizeRowContent(fset *token.FileSet, elt ast.Expr, compLit *ast.Composi
 			_ = format.Node(&buf, fset, kv)
 			parts = append(parts, buf.String())
 		} else {
-			if nameFieldIndex != -1 && idx == nameFieldIndex {
+			if fieldName, isNameField := nameFieldIndexes[idx]; isNameField && !retainedNameFields[fieldName] {
 				continue
 			}
 			var buf bytes.Buffer
@@ -662,6 +1084,7 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	}
 
 	validTables := make(map[*ast.CompositeLit]bool)
+	retainedNameFields := make(map[*ast.CompositeLit]map[string]bool)
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		rng, ok := n.(*ast.RangeStmt)
 		if !ok {
@@ -689,8 +1112,7 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 				ast.Inspect(expr, func(cn ast.Node) bool {
 					if sel, ok := cn.(*ast.SelectorExpr); ok {
 						if id, ok := sel.X.(*ast.Ident); ok && id.Obj == rowIdentObj {
-							low := strings.ToLower(sel.Sel.Name)
-							if low == "name" || low == "desc" || low == "description" || low == "title" {
+							if isNameLikeField(sel.Sel.Name) {
 								found = true
 								return false
 							}
@@ -725,6 +1147,17 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 			})
 			if hasConditionOnName {
 				return true
+			}
+		}
+
+		if inputs := rowNameInputFields(rng, rowIdentObj, testingParamObjs, suiteRecvObj); len(inputs) > 0 {
+			retained := retainedNameFields[compLit]
+			if retained == nil {
+				retained = make(map[string]bool)
+				retainedNameFields[compLit] = retained
+			}
+			for field := range inputs {
+				retained[field] = true
 			}
 		}
 
@@ -766,7 +1199,7 @@ func (r *TableDuplicateRule) Evaluate(unit parser.TestUnit) []models.Violation {
 	for compLit := range validTables {
 		seenRows := make(map[string]bool)
 		for _, elt := range compLit.Elts {
-			normalizedKey, fullContent := normalizeRowContent(fset, elt, compLit)
+			normalizedKey, fullContent := normalizeRowContent(fset, elt, compLit, retainedNameFields[compLit])
 			if normalizedKey == "" {
 				continue
 			}

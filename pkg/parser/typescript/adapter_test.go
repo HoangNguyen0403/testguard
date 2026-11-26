@@ -468,3 +468,174 @@ func TestLocateTests_MultilineParenthesizedHelperAssertion(t *testing.T) {
 		t.Errorf("expected a parenthesized body without assertions to stay uncredited, got %v", units[1].Assertions)
 	}
 }
+
+func TestLocateTests_TypedAsyncArrowHelper(t *testing.T) {
+	src := `
+		const rejectsAt = async (
+			bytes: Buffer,
+			reason: string,
+			offset: number,
+		): Promise<void> => {
+			await expect(inventory(bytes)).rejects.toMatchObject({ reason, offset });
+		};
+
+		it('typed async arrow helper caller', async () => {
+			await rejectsAt(Buffer.from('payload'), 'malformed', 4);
+		});
+	`
+
+	adapter := ts.NewAdapter()
+	units, err := adapter.LocateTests([]byte(src), "typed_arrow.test.ts")
+	if err != nil {
+		t.Fatalf("LocateTests error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 {
+		t.Errorf("expected the typed async arrow helper call to be credited once, got %v", units[0].Assertions)
+	}
+}
+
+func TestLocateTests_TypedFunctionHelper(t *testing.T) {
+	src := `
+		async function typedCheck(bytes: Buffer): Promise<void> {
+			await expect(bytes).toBeDefined();
+		}
+
+		it('typed function helper caller', async () => {
+			await typedCheck(Buffer.from('payload'));
+		});
+	`
+
+	adapter := ts.NewAdapter()
+	units, err := adapter.LocateTests([]byte(src), "typed_function.test.ts")
+	if err != nil {
+		t.Fatalf("LocateTests error: %v", err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("expected 1 unit, got %d", len(units))
+	}
+	if len(units[0].Assertions) != 1 {
+		t.Errorf("expected the typed function helper call to be credited once, got %v", units[0].Assertions)
+	}
+}
+
+func TestLocateTests_TypedHelperNegatives(t *testing.T) {
+	cases := []struct {
+		name string
+		unit string
+		src  string
+	}{
+		{
+			name: "typed helper without assertions",
+			unit: "typed helper without assertions",
+			src: `
+				const noAssertCheck = async (): Promise<void> => {
+					await Promise.resolve();
+				};
+
+				it('typed helper without assertions', async () => {
+					await noAssertCheck();
+				});
+			`,
+		},
+		{
+			name: "out of scope typed helper",
+			unit: "outside typed helper scope",
+			src: `
+				describe('owning scope', () => {
+					const scopedCheck = async (): Promise<void> => {
+						await expect(1).toBe(1);
+					};
+
+					it('inside typed helper scope', async () => {
+						await scopedCheck();
+					});
+				});
+
+				describe('sibling scope', () => {
+					it('outside typed helper scope', async () => {
+						await scopedCheck();
+					});
+				});
+			`,
+		},
+		{
+			name: "shadowed typed helper",
+			unit: "shadowed typed helper",
+			src: `
+				const shadowCheck = async (): Promise<void> => {
+					await expect(1).toBe(1);
+				};
+
+				it('shadowed typed helper', async () => {
+					const shadowCheck = async (): Promise<void> => {};
+					await shadowCheck();
+				});
+			`,
+		},
+		{
+			name: "type-only arrow annotation",
+			unit: "type-only arrow annotation",
+			src: `
+				const typeOnly: () => void = sharedCheck;
+
+				it('type-only arrow annotation', () => {
+					typeOnly();
+				});
+			`,
+		},
+		{
+			name: "bare helper reference",
+			unit: "bare helper reference",
+			src: `
+				const bareCheck = async (): Promise<void> => {
+					await expect(1).toBe(1);
+				};
+
+				it('bare helper reference', () => {
+					const fn = bareCheck;
+					fn;
+				});
+			`,
+		},
+		{
+			name: "uninvoked callback",
+			unit: "uninvoked callback",
+			src: `
+				const callbackCheck = async (): Promise<void> => {
+					await expect(1).toBe(1);
+				};
+
+				it('uninvoked callback', async () => {
+					await Promise.resolve().then(callbackCheck);
+				});
+			`,
+		},
+	}
+
+	adapter := ts.NewAdapter()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			units, err := adapter.LocateTests([]byte(tc.src), "typed_negatives.test.ts")
+			if err != nil {
+				t.Fatalf("LocateTests error: %v", err)
+			}
+
+			found := false
+			for _, unit := range units {
+				if unit.Name != tc.unit {
+					continue
+				}
+				found = true
+				if len(unit.Assertions) != 0 {
+					t.Errorf("expected %q to have 0 assertions, got %v", tc.unit, unit.Assertions)
+				}
+			}
+			if !found {
+				t.Fatalf("expected unit %q, got %d units", tc.unit, len(units))
+			}
+		})
+	}
+}

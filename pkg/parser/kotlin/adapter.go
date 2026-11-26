@@ -153,18 +153,36 @@ func skipCommentOrString(src string, i int) (int, bool) {
 		return n, false
 	}
 
+	// Multi-dollar string literal: the dollar run before the opening quote is
+	// the interpolation threshold, so a shorter run inside the literal is text.
+	if src[i] == '$' {
+		j := i
+		for j < n && src[j] == '$' {
+			j++
+		}
+		if j-i >= 2 && j < n && src[j] == '"' {
+			return skipStringLiteral(src, j, j-i)
+		}
+		return i, false
+	}
+
 	if src[i] == '"' {
-		return skipStringLiteral(src, i)
+		return skipStringLiteral(src, i, 1)
 	}
 
 	return i, false
 }
 
-// skipStringLiteral advances past a Kotlin string literal, honouring escapes,
-// triple-quoted text, and ${...} templates whose expressions may themselves
-// contain strings, comments, and braces.
-func skipStringLiteral(src string, i int) (int, bool) {
+// skipStringLiteral advances past a Kotlin string literal whose opening quote
+// is src[i], honouring escapes, triple-quoted text, and ${...} templates whose
+// expressions may themselves contain strings, comments, and braces. dollars is
+// the interpolation threshold: the number of dollar signs before the opening
+// quote, so an ordinary literal passes 1 while a `$$"..."` literal needs two.
+func skipStringLiteral(src string, i int, dollars int) (int, bool) {
 	n := len(src)
+	if dollars < 1 {
+		dollars = 1
+	}
 	triple := i+2 < n && src[i+1] == '"' && src[i+2] == '"'
 	j := i + 1
 	if triple {
@@ -175,18 +193,28 @@ func skipStringLiteral(src string, i int) (int, bool) {
 			j += 2
 			continue
 		}
-		if src[j] == '$' && j+1 < n {
-			if src[j+1] == '{' {
-				j = skipTemplateExpression(src, j+1)
-				continue
+		if src[j] == '$' {
+			// A run at or above the threshold interpolates; a shorter run is
+			// literal dollar text, including `${` and `$name` spellings.
+			run := j
+			for run < n && src[run] == '$' {
+				run++
 			}
-			if isIdentStart(src[j+1]) {
-				j += 2
-				for j < n && isIdentPart(src[j]) {
-					j++
+			if run-j >= dollars && run < n {
+				if src[run] == '{' {
+					j = skipTemplateExpression(src, run)
+					continue
 				}
-				continue
+				if isIdentStart(src[run]) {
+					j = run + 1
+					for j < n && isIdentPart(src[j]) {
+						j++
+					}
+					continue
+				}
 			}
+			j = run
+			continue
 		}
 		if triple {
 			if src[j] == '"' {
@@ -680,31 +708,7 @@ func parseKotlinUnits(src string, lineOffsets []int, filePath string, helperMap 
 								continue
 							}
 						} else if p < n && src[p] == '=' {
-							pEq := skipWhitespaceAndComments(src, p+1)
-							bodyStart := pEq
-							bodyEnd := -1
-							for q := pEq; q < n; {
-								nextQ := skipCommentsAndStrings(src, q)
-								if nextQ != q {
-									q = nextQ
-									continue
-								}
-								if src[q] == '{' {
-									cb := findMatchingBrace(src, q)
-									if cb != -1 {
-										bodyEnd = cb + 1
-										break
-									}
-								}
-								if src[q] == '\n' {
-									bodyEnd = q
-									break
-								}
-								q++
-							}
-							if bodyEnd == -1 {
-								bodyEnd = n
-							}
+							bodyStart, bodyEnd := expressionBodyBounds(src, p)
 							if isTest && !isIgnored {
 								body := src[bodyStart:bodyEnd]
 								startLine := lineFromOffset(lineOffsets, funOffset)
@@ -855,20 +859,124 @@ func findMatchingParenOrBracketRev(src string, closeIdx int) int {
 	return -1
 }
 
+// findMatchingAngle returns the index of the '>' that closes the '<' at
+// openIdx, ignoring angle brackets that appear inside comments, strings, or
+// backtick identifiers; it returns -1 when unmatched.
 func findMatchingAngle(src string, openIdx int) int {
 	depth := 0
 	n := len(src)
-	for i := openIdx; i < n; i++ {
-		if src[i] == '<' {
+	for i := openIdx; i < n; {
+		if next, _ := skipCommentOrString(src, i); next != i {
+			i = next
+			continue
+		}
+		switch src[i] {
+		case '<':
 			depth++
-		} else if src[i] == '>' {
+		case '>':
 			depth--
 			if depth == 0 {
 				return i
 			}
 		}
+		i++
 	}
 	return -1
+}
+
+// scanTypeArgumentList validates the Kotlin type-argument list that starts at
+// open and returns the index of its closing '>'. It reports false for a
+// non-type token sequence, so a comparison such as `fail < limit;` stops at the
+// first invalid byte instead of scanning the rest of the body for a later '>'.
+// Function types are accepted: `->` belongs to the type and never closes the
+// list. Comments are skipped; strings, numbers, and statement separators are
+// not type syntax and are rejected.
+func scanTypeArgumentList(src string, open int) (int, bool) {
+	if open < 0 || open >= len(src) || src[open] != '<' {
+		return -1, false
+	}
+	n := len(src)
+	depth := 1
+	canEndType := false
+	for i := open + 1; i < n; {
+		c := src[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\r' || c == '\n':
+			i++
+			continue
+		case c == '/' && i+1 < n && (src[i+1] == '/' || src[i+1] == '*'):
+			next, ok := skipCommentOrString(src, i)
+			if !ok {
+				return -1, false
+			}
+			i = next
+			continue
+		case c == '`' || isIdentStart(c):
+			if canEndType {
+				return -1, false
+			}
+			raw, _, end := readIdent(src, i)
+			if end == i {
+				return -1, false
+			}
+			// `out` and `in` project the type that follows them and are not
+			// themselves complete type arguments. Only the bare keyword counts:
+			// a backticked `out` is an ordinary type name.
+			if raw != "out" && raw != "in" {
+				canEndType = true
+			}
+			i = end
+			continue
+		}
+		switch c {
+		case '<':
+			if !canEndType {
+				return -1, false
+			}
+			depth++
+			canEndType = false
+		case '>':
+			// `->` is a function-type arrow, not the end of the type list.
+			if i > 0 && src[i-1] == '-' {
+				canEndType = false
+				break
+			}
+			if !canEndType {
+				return -1, false
+			}
+			depth--
+			if depth == 0 {
+				return i, true
+			}
+			canEndType = true
+		case ',':
+			if !canEndType {
+				return -1, false
+			}
+			canEndType = false
+		case '.', ':', '@', '&', '(':
+			canEndType = false
+		case '*':
+			// A star projection is a complete type argument on its own; a '*'
+			// after a completed type token is not type syntax (it would be
+			// multiplication in a comparison such as `fail < limit * 2`).
+			if canEndType {
+				return -1, false
+			}
+			canEndType = true
+		case '?', ')':
+			canEndType = true
+		case '-':
+			if i+1 >= n || src[i+1] != '>' || !canEndType {
+				return -1, false
+			}
+			canEndType = false
+		default:
+			return -1, false
+		}
+		i++
+	}
+	return -1, false
 }
 
 func skipTypeOrModifiers(src string, start int) int {
@@ -886,6 +994,33 @@ func skipTypeOrModifiers(src string, start int) int {
 		i++
 	}
 	return i
+}
+
+// expressionBodyBounds returns the range of the expression body that follows
+// the '=' at eq. start is the first non-space byte of the expression; end is
+// just past the first block in the expression, or the offset of its line break
+// when the expression has no block. The line-break bound is what stops the scan
+// from reading a later declaration's body as this expression's body.
+func expressionBodyBounds(src string, eq int) (start, end int) {
+	n := len(src)
+	start = skipWhitespaceAndComments(src, eq+1)
+	for q := start; q < n; {
+		next := skipCommentsAndStrings(src, q)
+		if next != q {
+			q = next
+			continue
+		}
+		if src[q] == '{' {
+			if closeBrace := findMatchingBrace(src, q); closeBrace != -1 {
+				return start, closeBrace + 1
+			}
+		}
+		if src[q] == '\n' {
+			return start, q
+		}
+		q++
+	}
+	return start, n
 }
 
 // extractAssertions scans a Kotlin test body and returns matching assertions.
@@ -975,9 +1110,21 @@ func extractAssertions(body string, helperMap map[string]bool, hasExpectedExcept
 					}
 				}
 
-				// Check fail(
+				// Check fail(, including an explicit generic type-argument
+				// list (fail<Any>(...), Subject.fail<Map<K, V>>(...),
+				// fail<(String) -> Unit>(...)). A bare type reference such
+				// as `val f = fail<Any>` and a comparison such as
+				// `fail < limit;` are not invocations and earn no credit.
 				if ident == "fail" {
 					k := skipWhitespaceAndComments(body, i)
+					if k < n && body[k] == '<' {
+						closeAngle, ok := scanTypeArgumentList(body, k)
+						if !ok {
+							k = n
+						} else {
+							k = skipWhitespaceAndComments(body, closeAngle+1)
+						}
+					}
 					if k < n && body[k] == '(' {
 						assertions = append(assertions, "fail")
 						continue
@@ -1081,6 +1228,18 @@ func findAssertingHelpers(src string) map[string]bool {
 									helpers[funName] = true
 								}
 								i = closeBrace + 1
+								continue
+							}
+						} else if p < n && src[p] == '=' {
+							bodyStart, bodyEnd := expressionBodyBounds(src, p)
+							if bodyEnd > bodyStart {
+								as := extractAssertions(src[bodyStart:bodyEnd], nil, false)
+								if len(as) > 0 {
+									helpers[funName] = true
+								}
+							}
+							if bodyEnd > i {
+								i = bodyEnd
 								continue
 							}
 						}

@@ -400,6 +400,48 @@ func TestDiff_TargetPathScoping(t *testing.T) {
 	}
 }
 
+func TestDiff_DiscoversHyphenTestFilesInTestsDirectory(t *testing.T) {
+	repo := initGitRepo(t)
+
+	initFile := filepath.Join(repo, "initial_test.go")
+	_ = os.WriteFile(initFile, []byte("package sample\nimport \"testing\"\nfunc TestInit(t *testing.T) {\n  if 1 != 1 { t.Fatal(\"err\") }\n}\n"), 0644)
+	runGit(t, repo, "add", "initial_test.go")
+	runGit(t, repo, "commit", "-m", "init")
+
+	testsDir := filepath.Join(repo, "__tests__")
+	_ = os.MkdirAll(testsDir, 0755)
+	testFile := filepath.Join(testsDir, "Foo-test.js")
+	_ = os.WriteFile(testFile, []byte("it('adds', () => { expect(1 + 1).toBe(2); });\n"), 0644)
+
+	// Root build script with the same hyphen suffix must stay out of the diff scope.
+	buildScript := filepath.Join(repo, "build-and-test.js")
+	_ = os.WriteFile(buildScript, []byte("module.exports = () => {};\n"), 0644)
+
+	eng := engine.New()
+	res, err := eng.Run(engine.Options{
+		TargetPaths: []string{repo},
+		DiffOnly:    true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected engine error: %v", err)
+	}
+
+	if res.Report.Scope.EffectiveMode != "diff" {
+		t.Errorf("expected EffectiveMode 'diff', got %q", res.Report.Scope.EffectiveMode)
+	}
+	if res.Report.Analysis.AnalyzedFiles != 1 {
+		t.Fatalf("expected 1 analyzed file, got %d (%v)", res.Report.Analysis.AnalyzedFiles, res.Report.Scope.Files)
+	}
+	if len(res.Report.Scope.Files) != 1 || filepath.Base(res.Report.Scope.Files[0]) != "Foo-test.js" {
+		t.Errorf("expected __tests__/Foo-test.js to be the analyzed file, got %+v", res.Report.Scope.Files)
+	}
+	for _, file := range res.Report.Scope.Files {
+		if filepath.Base(file) == "build-and-test.js" {
+			t.Errorf("expected root build-and-test.js to stay out of the diff scope, got %+v", res.Report.Scope.Files)
+		}
+	}
+}
+
 func TestDiff_GitUnavailableDiagnostic(t *testing.T) {
 	nonGitDir := t.TempDir()
 	eng := engine.New()

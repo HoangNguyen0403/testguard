@@ -1,6 +1,8 @@
 package hygiene_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/HoangNguyen0403/testguard/pkg/models"
@@ -580,6 +582,25 @@ struct MyTests {
 		}
 		if violations[0].LineNumber != 3 {
 			t.Errorf("expected line 3, got %d", violations[0].LineNumber)
+		}
+	})
+
+	t.Run("late skip declarations in large file still flagged", func(t *testing.T) {
+		var b strings.Builder
+		b.WriteString("import XCTest\nclass LargeTests: XCTestCase {\n")
+		for i := range 1500 {
+			fmt.Fprintf(&b, "    let value%d = %d\n", i, i)
+		}
+		b.WriteString("    func testLate() throws {\n        throw XCTSkip(\"late\")\n    }\n")
+		b.WriteString("    @Test(.disabled(\"issue-456\"))\n    func lateDisabled() {\n        #expect(1 == 1)\n    }\n}\n")
+		// 2 header lines + 1500 body lines -> func testLate on 1503, throw on 1504,
+		// disabled attribute on 1506.
+		violations := rule.CheckFile("LargeTests.swift", b.String())
+		if len(violations) != 2 {
+			t.Fatalf("expected 2 violations in large file, got %d (%+v)", len(violations), violations)
+		}
+		if violations[0].LineNumber != 1504 || violations[1].LineNumber != 1506 {
+			t.Errorf("expected lines 1504 and 1506, got %d and %d", violations[0].LineNumber, violations[1].LineNumber)
 		}
 	})
 }

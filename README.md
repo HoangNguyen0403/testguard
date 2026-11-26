@@ -146,6 +146,7 @@ Run `testguard rules` for the authoritative list with severities; `testguard exp
 - **[Quickstart Guide](QUICKSTART.md)** — Step-by-step installation, CI integration, and troubleshooting.
 - **[Architecture & Design Guide](ARCHITECTURE.md)** — Core design principles, execution lifecycle, package boundaries, and extension recipes for maintainers and AI agents.
 - **[Changelog](CHANGELOG.md)** — Release history and version updates.
+- **[Popular GitHub Corpus Benchmark](docs/benchmarks/github-corpus.md)** — Pinned public-repository scans, sampled finding adjudication, and remaining accuracy limits.
 ---
 
 ## 📄 License

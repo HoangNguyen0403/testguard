@@ -304,6 +304,107 @@ it('b', () => { expect(2).toBe(2); });`
 	})
 }
 
+// tick delimits a template literal in fixtures. Go raw strings cannot contain
+// it, and escaping every backtick would obscure the shapes under test.
+const tick = "\x60"
+
+// R5: a regex literal inside a `${...}` interpolation is lexed as a regex, not
+// as a comment or a string, so its apostrophes, escaped slashes, character
+// classes and quantifier braces cannot end the literal early. Every case ends
+// with a second test to prove the scan is not truncated: the rea and ECC
+// corpus failures each lost every declaration after the offending template.
+func TestR5_RegexInsideTemplateInterpolation(t *testing.T) {
+	cases := map[string]string{
+		"rea escaped-quote regex": `it('template case', () => {
+  const script = ` + tick + `if ${guard}; then printf '%b' '${output.replaceAll("\\", "\\\\").replaceAll("\0", "\\000").replace(/'/gu, "'\\''")}'; exit 0; fi` + tick + `;
+  expect(script).toContain('exit 0');
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+		"ecc escaped-slash regex": `it('template case', () => {
+  const native = ` + tick + `${match[2].toUpperCase()}:\\${match[2].replace(/\//g, '\\')}` + tick + `;
+  expect(native).toBe('C:\\tmp');
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+		"nested template with quote regex": `it('template case', () => {
+  const quoted = ` + tick + `'${payload.replace(/'/g, ` + tick + `'\\''` + tick + `)}'` + tick + `;
+  expect(quoted).toContain("''");
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+		"character class metacharacters": `it('template case', () => {
+  const safe = ` + tick + `${value.replace(/[/{}` + tick + `'"]/g, '_')}` + tick + `;
+  expect(safe).toBe('_');
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+		"quantifier braces": `it('template case', () => {
+  const ok = ` + tick + `${/(a){2}/.test(s)}` + tick + `;
+  expect(ok).toBe(true);
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+		"regex then division": `it('template case', () => {
+  const n = ` + tick + `${/(\d+)/.test(s) ? total / 2 : 0}` + tick + `;
+  expect(n).toBe(0);
+});
+it('keeps the next test', () => { expect(1).toBe(1); });`,
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			units := locateSource(t, src)
+			got := unitNames(units)
+			if len(units) != 2 || got[0] != "template case" || got[1] != "keeps the next test" {
+				t.Fatalf("expected both declarations, got %v", got)
+			}
+			for i, u := range units {
+				if len(u.Assertions) != 1 {
+					t.Errorf("unit %d (%q): expected 1 credited assertion, got %d", i, u.Name, len(u.Assertions))
+				}
+				if u.Meta["body_start_line"] == "" {
+					t.Errorf("unit %d (%q) lost body_start_line", i, u.Name)
+				}
+			}
+		})
+	}
+}
+
+// R5 negatives: the regex decision must not turn division into a regex, must
+// not swallow real comments, and malformed input must still fail closed.
+func TestR5_RegexInterpolationNegatives(t *testing.T) {
+	stillParses := map[string]string{
+		"plain division":   `it('ratio', () => { expect(` + tick + `${a / b}` + tick + `).toBe(0.5); });`,
+		"chained division": `it('ratio', () => { expect(` + tick + `${a / b / c}` + tick + `).toBe(0.5); });`,
+		"division then apostrophe string": `it('ratio', () => {
+  const msg = ` + tick + `${done / total}` + tick + `;
+  expect(msg).toBe('0.5');
+});`,
+		"line comment inside interpolation": `it('comment', () => {
+  const v = ` + tick + `${a // explain
+}` + tick + `;
+  expect(v).toBe('1');
+});`,
+		"block comment inside interpolation": `it('comment', () => { const v = ` + tick + `${/* note */ a}` + tick + `; expect(v).toBe('1'); });`,
+	}
+	for name, src := range stillParses {
+		t.Run(name, func(t *testing.T) {
+			units := locateSource(t, src)
+			if len(units) != 1 || len(units[0].Assertions) != 1 {
+				t.Fatalf("expected 1 unit with 1 assertion, got %v", unitNames(units))
+			}
+		})
+	}
+
+	failClosed := map[string]string{
+		"unterminated template":                       "it('t', () => { const s = " + tick + "${x.replace(/'/g, 'y')};",
+		"unterminated interpolation":                  "it('t', () => { const s = " + tick + "${x.replace(/'/g, 'y')" + tick + ` ;`,
+		"unterminated block comment in interpolation": "it('t', () => { const s = " + tick + "${x /* note}" + tick + ` ;`,
+	}
+	for name, src := range failClosed {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ts.NewAdapter().LocateTests([]byte(src), "r5.test.ts"); err == nil {
+				t.Fatal("expected a lexical error, got a successful scan")
+			}
+		})
+	}
+}
+
 // R3-2: an imported or otherwise bound fit is a utility, not Jasmine's focused
 // test; the global fit, and it/test/specify/fixtures, are still discovered.
 func TestR3_BoundFitIsNotATest(t *testing.T) {

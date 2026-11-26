@@ -132,6 +132,47 @@ func isTestFileName(name string) bool {
 	return false
 }
 
+// isTestFilePath reports whether path names a test file. Conventions encoded in
+// the file name delegate to isTestFileName. The hyphen "-test" script suffix is
+// a React convention that only marks a test under a __tests__ directory, so
+// root scripts such as build-and-test.js or .vscode-test.mjs stay
+// non-test and helper modules in __tests__ are not swept in wholesale.
+func isTestFilePath(path string) bool {
+	if isTestFileName(filepath.Base(path)) {
+		return true
+	}
+	return hasTestsDirectory(path) && hasHyphenTestScriptSuffix(filepath.Base(path))
+}
+
+// hasTestsDirectory reports whether any ancestor directory of path is named __tests__.
+func hasTestsDirectory(path string) bool {
+	dir := filepath.Dir(filepath.Clean(path))
+	for {
+		if filepath.Base(dir) == "__tests__" {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+}
+
+// hasHyphenTestScriptSuffix reports whether name ends with "-test" plus a supported script extension.
+func hasHyphenTestScriptSuffix(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	lower := strings.ToLower(name)
+	for _, ext := range testFileExtensions {
+		if strings.HasSuffix(lower, "-test"+ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // isSupportedLanguageExtension returns true if the extension belongs to a supported language.
 func isSupportedLanguageExtension(ext string) bool {
 	lower := strings.ToLower(ext)
@@ -239,7 +280,7 @@ func DiscoverScope(paths []string, adapters []parser.LanguageAdapter, failTraver
 				continue
 			}
 
-			if !isTestFileName(filepath.Base(trimmed)) {
+			if !isTestFilePath(trimmed) {
 				norm := normalizePath(p)
 				if !excludedMap[norm] {
 					excludedMap[norm] = true
@@ -317,7 +358,7 @@ func DiscoverScope(paths []string, adapters []parser.LanguageAdapter, failTraver
 				return nil
 			}
 
-			if isTestFileName(d.Name()) {
+			if isTestFilePath(path) {
 				canon := canonicalAbsPath(path)
 				if !seenDiscovered[canon] {
 					seenDiscovered[canon] = true

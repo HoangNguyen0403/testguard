@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Public GitHub Diagnostic Benchmark**: Added top-star open-source repositories for each supported language (Go, Dart, TypeScript, JavaScript, Kotlin, Swift) with pinned commits, before/after scans, adjudicated finding labels, and explicit precision, recall, scope and adoption limits in `docs/benchmarks/github-corpus.md`. Empty or incomplete scans are reported as not applicable, never as clean.
 - **Dual Scan Modes (`--all` vs `--diff`)**: Added `--diff` (`-d`) flag to audit only git modified and untracked candidate test files against `--base <ref>` (with default clean-repo fallback), properly scoped to explicit target directories with excluded directory filtering. `--diff` and `--all` are mutually exclusive.
 - **Dart Arrow-Body Test Discovery**: Added discovery for single-expression arrow callback tests (`test('name', () => ...)` and `testWidgets('name', (tester) => ...)`), complete with multiline argument parsing and generic bracket balancing (`verify<Future<...>>`).
 - **4 New Anti-Slop Rules**:
@@ -27,7 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Corpus Parity Gate**: the corpus test now fails when a rule is emitted that the catalog does not document, when an emitted severity differs from the documented severity, when a catalog rule has no true positive, when a catalog rule claims a language with no true-positive fixture, when an expected finding does not match on rule ID, severity, case-relative path and line, or when an ordinary case is not a complete analysis of at least one test. A skipped-only scope is asserted separately as `incomplete/empty_scope` with exit 2 so it cannot be mistaken for a clean pass.
 
 ### Changed
+- Bump the CLI's default build version to `0.1.7`; release builds continue to take their version from the release tag.
 - **False-positive hardening**:
+  - Go expected-error branches no longer trigger `GUARD-GO-SWALLOWED-ERR` when an adjacent fatal guard checks the same error against an independent test input. JavaScript/TypeScript nonempty `assert.ok(value.includes("…"))` checks are not existence-only. Swift unlabeled file-scope `test*` functions are not treated as XCTest methods.
+  - Go `GUARD-GO-EXISTENCE-ONLY` credits any use of the result bound by `ast.Object` identity (field, index, range, return, operand, boolean branch, call argument) except existence assertions, nil comparisons and bare `_ = res` discards; a same-named variable in another scope is never credited. `GUARD-GO-03` keeps a row `name`/`title` field as a distinguishing input when the loop passes it to the system under test.
+  - Kotlin `fail<T>()` counts as a failure assertion (including function-type, `*` and `in`/`out` arguments) with a bounded scan that rejects comparison chains; multi-dollar string literals (`$$"…"`) are lexed with their interpolation threshold; same-file expression-bodied asserting helpers are credited.
+  - TypeScript self-mock analysis distinguishes deferred concise-arrow callbacks from direct mock execution (type annotations, immediate invocation, multiline and ASI boundaries); regex literals inside template interpolations lex correctly; typed local assertion helpers are recognized.
+  - Test-file discovery accepts `*-test.<script>` files under a `__tests__` directory in full, explicit-path and `--diff` scopes; generic hyphen names elsewhere remain excluded.
+  - Swift Testing closure-form `#expect { … } throws:` and `#require { … }` count as assertions, and the skip scan is linear (a three-file Swift compiler sample dropped from 33.8 s to 0.04 s).
   - Dart Robot-pattern tests now resolve `*Robot` receivers and local helper-class methods that assert, so `robot.verifyX()` / `robot.expectX()` count as assertions.
   - `GUARD-UNIV-IDENTITY-FIXTURE` no longer treats Flutter `Offset(...)` geometry or pagination `offset: 0` next to `pageSize`/`limit` as calculation identity fixtures.
   - `GUARD-UNIV-01` no longer double-reports a `blocTest` already flagged by `GUARD-DART-BLOC-DUPLICATE`.
